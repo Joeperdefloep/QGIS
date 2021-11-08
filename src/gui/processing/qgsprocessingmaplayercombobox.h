@@ -136,6 +136,7 @@ class GUI_EXPORT QgsProcessingMapLayerComboBox : public QWidget
     void showSourceOptions();
     void selectFromFile();
     void browseForLayer();
+    void browseForRasterLayer();
 
   private:
     std::unique_ptr< QgsProcessingParameterDefinition > mParameter;

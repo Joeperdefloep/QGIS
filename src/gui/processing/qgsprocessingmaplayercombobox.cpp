@@ -100,6 +100,18 @@ QgsProcessingMapLayerComboBox::QgsProcessingMapLayerComboBox( const QgsProcessin
     mSelectButton->setMenu( mFeatureSourceMenu );
     mSelectButton->setPopupMode( QToolButton::InstantPopup );
   }
+  else if (mParameter->type() == QgsProcessingParameterRasterLayer::typeName())
+  {
+    mFeatureSourceMenu = new QMenu( this );
+    QAction *selectFromFileAction = new QAction( tr( "Select File…" ), mFeatureSourceMenu );
+    connect( selectFromFileAction, &QAction::triggered, this, &QgsProcessingMapLayerComboBox::selectFromFile );
+    mFeatureSourceMenu->addAction( selectFromFileAction );
+    QAction *browseForLayerAction = new QAction( tr( "Browse for Raster…" ), mFeatureSourceMenu );
+    connect( browseForLayerAction, &QAction::triggered, this, &QgsProcessingMapLayerComboBox::browseForRasterLayer );
+    mFeatureSourceMenu->addAction( browseForLayerAction );
+    mSelectButton->setMenu( mFeatureSourceMenu );
+    mSelectButton->setPopupMode( QToolButton::InstantPopup );
+  }
   else
   {
     connect( mSelectButton, &QToolButton::clicked, this, &QgsProcessingMapLayerComboBox::selectFromFile );
@@ -688,6 +700,32 @@ void QgsProcessingMapLayerComboBox::browseForLayer()
   }
 }
 
+void QgsProcessingMapLayerComboBox::browseForRasterLayer()
+{
+  if ( QgsPanelWidget *panel = QgsPanelWidget::findParentPanel( this ) )
+  {
+    QgsDataSourceSelectWidget *widget = new QgsDataSourceSelectWidget( mBrowserModel, true, QgsMapLayerType::RasterLayer );
+    widget->setPanelTitle( tr( "Browse for \"%1\"" ).arg( mParameter->description() ) );
 
+    panel->openPanel( widget );
+
+    connect( widget, &QgsDataSourceSelectWidget::itemTriggered, this, [ = ]( const QgsMimeDataUtils::Uri & )
+    {
+      widget->acceptPanel();
+    } );
+    connect( widget, &QgsPanelWidget::panelAccepted, this, [ = ]()
+    {
+      QgsProcessingContext context;
+      if ( widget->uri().uri.isEmpty() )
+        setValue( QVariant(), context );
+      else if ( widget->uri().providerKey == QLatin1String( "ogr" ) )
+        setValue( widget->uri().uri, context );
+      else
+      {
+        setValue( QgsProcessingUtils::encodeProviderKeyAndUri( widget->uri().providerKey, widget->uri().uri ), context );
+      }
+    } );
+  }
+}
 
 ///@endcond
