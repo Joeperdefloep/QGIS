@@ -257,7 +257,8 @@ QgsRasterFileWriter::WriterError QgsRasterFileWriter::writeDataRaster( const Qgs
       QgsRasterProjector *projector = pipe->projector();
       if ( projector && projector->destinationCrs() != projector->sourceCrs() )
       {
-        const QgsCoordinateTransform ct( projector->destinationCrs(), projector->sourceCrs(), transformContext );
+        QgsCoordinateTransform ct( projector->destinationCrs(), projector->sourceCrs(), transformContext );
+        ct.setBallparkTransformsAreAppropriate( true );
         outputExtentInSrcCrs = ct.transformBoundingBox( outputExtent );
       }
       if ( !srcProviderExtent.contains( outputExtentInSrcCrs ) &&
@@ -434,7 +435,7 @@ QgsRasterFileWriter::WriterError QgsRasterFileWriter::writeDataRaster( const Qgs
 
   for ( int i = 1; i <= nBands; ++i )
   {
-    iter->startRasterRead( i, nCols, nRows, outputExtent );
+    iter->startRasterRead( i, nCols, nRows, outputExtent, feedback );
     if ( destProvider && destHasNoDataValueList.value( i - 1 ) ) // no tiles
     {
       destProvider->setNoDataValue( i, destNoDataValueList.value( i - 1 ) );

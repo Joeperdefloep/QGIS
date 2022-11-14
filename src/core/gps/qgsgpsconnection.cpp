@@ -23,92 +23,161 @@
 #include <QStringList>
 #include <QFileInfo>
 
-#include "qgsnmeaconnection.h"
-#include "qgslogger.h"
 #include "info.h"
 
+Qgis::GpsFixStatus QgsGpsInformation::bestFixStatus( Qgis::GnssConstellation &constellation ) const
+{
+  constellation = Qgis::GnssConstellation::Unknown;
+  Qgis::GpsFixStatus bestStatus = Qgis::GpsFixStatus::NoData;
+  for ( auto it = mConstellationFixStatus.begin(); it != mConstellationFixStatus.end(); ++it )
+  {
+    if ( it.value() == Qgis::GpsFixStatus::Fix3D
+         || ( it.value() == Qgis::GpsFixStatus::Fix2D && bestStatus != Qgis::GpsFixStatus::Fix3D )
+         || ( it.value() == Qgis::GpsFixStatus::NoFix && bestStatus == Qgis::GpsFixStatus::NoData )
+       )
+    {
+      bestStatus = it.value();
+      constellation = it.key();
+    }
+  }
+  return bestStatus;
+}
 
 bool QgsGpsInformation::isValid() const
 {
   bool valid = false;
-  if ( status == 'V' || fixType == NMEA_FIX_BAD || quality == 0 ) // some sources say that 'V' indicates position fix, but is below acceptable quality
+  Qgis::GnssConstellation constellation = Qgis::GnssConstellation::Unknown;
+  const Qgis::GpsFixStatus bestFix = bestFixStatus( constellation );
+  if ( status == 'V'
+       || bestFix == Qgis::GpsFixStatus::NoFix
+       || qualityIndicator == Qgis::GpsQualityIndicator::Invalid ) // some sources say that 'V' indicates position fix, but is below acceptable quality
   {
     valid = false;
   }
-  else if ( fixType == NMEA_FIX_2D )
+  else if ( status == 'A'
+            || bestFix == Qgis::GpsFixStatus::Fix2D
+            || bestFix == Qgis::GpsFixStatus::Fix3D
+            || ( qualityIndicator != Qgis::GpsQualityIndicator::Invalid ) ) // good
   {
     valid = true;
   }
-  else if ( status == 'A' || fixType == NMEA_FIX_3D || quality > 0 ) // good
-  {
-    valid = true;
-  }
+
+  valid &= longitude >= -180.0 && longitude <= 180.0 && latitude >= -90.0 && latitude <= 90.0;
 
   return valid;
 }
 
-QgsGpsInformation::FixStatus QgsGpsInformation::fixStatus() const
+Qgis::GpsFixStatus QgsGpsInformation::fixStatus() const
 {
-  FixStatus fixStatus = NoData;
+  Qgis::GpsFixStatus fixStatus = Qgis::GpsFixStatus::NoData;
 
   // no fix if any of the three report bad; default values are invalid values and won't be changed if the corresponding NMEA msg is not received
-  if ( status == 'V' || fixType == NMEA_FIX_BAD || quality == 0 ) // some sources say that 'V' indicates position fix, but is below acceptable quality
+  if ( status == 'V' || fixType == NMEA_FIX_BAD || qualityIndicator == Qgis::GpsQualityIndicator::Invalid ) // some sources say that 'V' indicates position fix, but is below acceptable quality
   {
-    fixStatus = NoFix;
+    fixStatus = Qgis::GpsFixStatus::NoFix;
   }
   else if ( fixType == NMEA_FIX_2D ) // 2D indication (from GGA)
   {
-    fixStatus = Fix2D;
+    fixStatus = Qgis::GpsFixStatus::Fix2D;
   }
-  else if ( status == 'A' || fixType == NMEA_FIX_3D || quality > 0 ) // good
+  else if ( status == 'A' || fixType == NMEA_FIX_3D || qualityIndicator != Qgis::GpsQualityIndicator::Invalid ) // good
   {
-    fixStatus = Fix3D;
+    fixStatus = Qgis::GpsFixStatus::Fix3D;
   }
   return fixStatus;
 }
 
 QString QgsGpsInformation::qualityDescription() const
 {
-  switch ( quality )
+  switch ( qualityIndicator )
   {
-    case 8:
+    case Qgis::GpsQualityIndicator::Simulation:
       return QCoreApplication::translate( "QgsGpsInformation", "Simulation mode" );
 
-    case 7:
+    case Qgis::GpsQualityIndicator::Manual:
       return QCoreApplication::translate( "QgsGpsInformation", "Manual input mode" );
 
-    case 6:
+    case Qgis::GpsQualityIndicator::Estimated:
       return QCoreApplication::translate( "QgsGpsInformation", "Estimated" );
 
-    case 5:
+    case Qgis::GpsQualityIndicator::FloatRTK:
       return QCoreApplication::translate( "QgsGpsInformation", "Float RTK" );
 
-    case 4:
+    case Qgis::GpsQualityIndicator::RTK:
       return QCoreApplication::translate( "QgsGpsInformation", "Fixed RTK" );
 
-    case 3:
+    case Qgis::GpsQualityIndicator::PPS:
       return QCoreApplication::translate( "QgsGpsInformation", "PPS" );
 
-    case 2:
+    case Qgis::GpsQualityIndicator::DGPS:
       return QCoreApplication::translate( "QgsGpsInformation", "DGPS" );
 
-    case 1:
+    case Qgis::GpsQualityIndicator::GPS:
       return QCoreApplication::translate( "QgsGpsInformation", "Autonomous" );
 
-    case 0:
+    case Qgis::GpsQualityIndicator::Invalid:
       return QCoreApplication::translate( "QgsGpsInformation", "Invalid" );
 
-    default:
+    case Qgis::GpsQualityIndicator::Unknown:
       return QCoreApplication::translate( "QgsGpsInformation", "Unknown (%1)" ).arg( QString::number( quality ) );
   }
+  BUILTIN_UNREACHABLE
+}
+
+QVariant QgsGpsInformation::componentValue( Qgis::GpsInformationComponent component ) const
+{
+  if ( !isValid() )
+    return QVariant();
+
+  switch ( component )
+  {
+    case Qgis::GpsInformationComponent::Location:
+      return QgsPointXY( longitude, latitude );
+
+    case Qgis::GpsInformationComponent::Altitude:
+      return elevation;
+    case Qgis::GpsInformationComponent::GroundSpeed:
+      return speed;
+    case Qgis::GpsInformationComponent::Bearing:
+      return std::isnan( direction ) ? QVariant() : direction;
+
+    case Qgis::GpsInformationComponent::Pdop:
+      return pdop;
+    case Qgis::GpsInformationComponent::Hdop:
+      return hdop;
+    case Qgis::GpsInformationComponent::Vdop:
+      return vdop;
+    case Qgis::GpsInformationComponent::HorizontalAccuracy:
+      return hacc;
+    case Qgis::GpsInformationComponent::VerticalAccuracy:
+      return vacc;
+    case Qgis::GpsInformationComponent::HvAccuracy:
+      return hvacc;
+    case Qgis::GpsInformationComponent::SatellitesUsed:
+      return satellitesUsed;
+
+    case Qgis::GpsInformationComponent::Timestamp:
+      return utcDateTime;
+
+    case Qgis::GpsInformationComponent::TotalTrackLength:
+    case Qgis::GpsInformationComponent::TrackDistanceFromStart:
+    case Qgis::GpsInformationComponent::TrackStartTime:
+    case Qgis::GpsInformationComponent::TrackEndTime:
+    case Qgis::GpsInformationComponent::TrackDistanceSinceLastPoint:
+    case Qgis::GpsInformationComponent::TrackTimeSinceLastPoint:
+      return QVariant(); // not available
+  }
+  BUILTIN_UNREACHABLE
 }
 
 QgsGpsConnection::QgsGpsConnection( QIODevice *dev )
   : QObject( nullptr )
   , mSource( dev )
 {
-  clearLastGPSInformation();
-  QObject::connect( dev, &QIODevice::readyRead, this, &QgsGpsConnection::parseData );
+  if ( mSource )
+    QObject::connect( mSource.get(), &QIODevice::readyRead, this, &QgsGpsConnection::parseData );
+
+  QObject::connect( this, &QgsGpsConnection::stateChanged, this, &QgsGpsConnection::onStateChanged );
 }
 
 QgsGpsConnection::~QgsGpsConnection()
@@ -139,6 +208,13 @@ bool QgsGpsConnection::close()
   }
 
   mSource->close();
+
+  if ( mLastFixStatus != Qgis::GpsFixStatus::NoData )
+  {
+    mLastFixStatus = Qgis::GpsFixStatus::NoData;
+    emit fixStatusChanged( mLastFixStatus );
+  }
+
   return true;
 }
 
@@ -149,13 +225,42 @@ void QgsGpsConnection::cleanupSource()
     mSource->close();
   }
   mSource.reset();
+
+  if ( mLastFixStatus != Qgis::GpsFixStatus::NoData )
+  {
+    mLastFixStatus = Qgis::GpsFixStatus::NoData;
+    emit fixStatusChanged( mLastFixStatus );
+  }
 }
 
 void QgsGpsConnection::setSource( QIODevice *source )
 {
   cleanupSource();
   mSource.reset( source );
+  QObject::connect( mSource.get(), &QIODevice::readyRead, this, &QgsGpsConnection::parseData );
+
   clearLastGPSInformation();
+}
+
+void QgsGpsConnection::onStateChanged( const QgsGpsInformation &info )
+{
+  if ( info.isValid() )
+  {
+    const QgsPoint oldPosition = mLastLocation;
+    mLastLocation = QgsPoint( info.longitude, info.latitude, info.elevation );
+    if ( mLastLocation != oldPosition )
+    {
+      emit positionChanged( mLastLocation );
+    }
+  }
+
+  Qgis::GnssConstellation bestFixConstellation = Qgis::GnssConstellation::Unknown;
+  Qgis::GpsFixStatus bestFix = info.bestFixStatus( bestFixConstellation );
+  if ( bestFix != mLastFixStatus )
+  {
+    mLastFixStatus = bestFix;
+    emit fixStatusChanged( mLastFixStatus );
+  }
 }
 
 void QgsGpsConnection::clearLastGPSInformation()

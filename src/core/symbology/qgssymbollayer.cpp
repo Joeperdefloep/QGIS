@@ -92,9 +92,9 @@ void QgsSymbolLayer::initPropertyDefinitions()
     { QgsSymbolLayer::PropertyOpacity, QgsPropertyDefinition( "alpha", QObject::tr( "Opacity" ), QgsPropertyDefinition::Opacity, origin )},
     { QgsSymbolLayer::PropertyCustomDash, QgsPropertyDefinition( "customDash", QgsPropertyDefinition::DataTypeString, QObject::tr( "Custom dash pattern" ), QObject::tr( "[<b><dash>;<space></b>] e.g. '8;2;1;2'" ), origin )},
     { QgsSymbolLayer::PropertyCapStyle, QgsPropertyDefinition( "capStyle", QObject::tr( "Line cap style" ), QgsPropertyDefinition::CapStyle, origin )},
-    { QgsSymbolLayer::PropertyPlacement, QgsPropertyDefinition( "placement", QgsPropertyDefinition::DataTypeString, QObject::tr( "Marker placement" ), QObject::tr( "string " ) + "[<b>interval</b>|<b>vertex</b>|<b>lastvertex</b>|<b>firstvertex</b>|<b>centerpoint</b>|<b>curvepoint</b>|<b>segmentcenter</b>]", origin )},
+    { QgsSymbolLayer::PropertyPlacement, QgsPropertyDefinition( "placement", QgsPropertyDefinition::DataTypeString, QObject::tr( "Marker placement" ), QObject::tr( "string " ) + "[<b>interval</b>|<b>innervertices</b>|<b>vertex</b>|<b>lastvertex</b>|<b>firstvertex</b>|<b>centerpoint</b>|<b>curvepoint</b>|<b>segmentcenter</b>]", origin )},
     { QgsSymbolLayer::PropertyInterval, QgsPropertyDefinition( "interval", QObject::tr( "Marker interval" ), QgsPropertyDefinition::DoublePositive, origin )},
-    { QgsSymbolLayer::PropertyOffsetAlongLine, QgsPropertyDefinition( "offsetAlongLine", QObject::tr( "Offset along line" ), QgsPropertyDefinition::DoublePositive, origin )},
+    { QgsSymbolLayer::PropertyOffsetAlongLine, QgsPropertyDefinition( "offsetAlongLine", QObject::tr( "Offset along line" ), QgsPropertyDefinition::Double, origin )},
     { QgsSymbolLayer::PropertyAverageAngleLength, QgsPropertyDefinition( "averageAngleLength", QObject::tr( "Average line angles over" ), QgsPropertyDefinition::DoublePositive, origin )},
     { QgsSymbolLayer::PropertyHorizontalAnchor, QgsPropertyDefinition( "hAnchor", QObject::tr( "Horizontal anchor point" ), QgsPropertyDefinition::HorizontalAnchor, origin )},
     { QgsSymbolLayer::PropertyVerticalAnchor, QgsPropertyDefinition( "vAnchor", QObject::tr( "Vertical anchor point" ), QgsPropertyDefinition::VerticalAnchor, origin )},
@@ -132,12 +132,23 @@ void QgsSymbolLayer::startFeatureRender( const QgsFeature &feature, QgsRenderCon
 {
   if ( QgsSymbol *lSubSymbol = subSymbol() )
     lSubSymbol->startFeatureRender( feature, context );
+
+  if ( !mClipPath.isEmpty() )
+  {
+    context.painter()->save();
+    context.painter()->setClipPath( mClipPath, Qt::IntersectClip );
+  }
 }
 
 void QgsSymbolLayer::stopFeatureRender( const QgsFeature &feature, QgsRenderContext &context )
 {
   if ( QgsSymbol *lSubSymbol = subSymbol() )
     lSubSymbol->stopFeatureRender( feature, context );
+
+  if ( !mClipPath.isEmpty() )
+  {
+    context.painter()->restore();
+  }
 }
 
 QgsSymbol *QgsSymbolLayer::subSymbol()
@@ -231,6 +242,35 @@ QgsSymbolLayer::QgsSymbolLayer( Qgis::SymbolType type, bool locked )
 Qgis::SymbolLayerFlags QgsSymbolLayer::flags() const
 {
   return Qgis::SymbolLayerFlags();
+}
+
+QColor QgsSymbolLayer::color() const
+{
+  return mColor;
+}
+
+void QgsSymbolLayer::setColor( const QColor &color )
+{
+  mColor = color;
+}
+
+void QgsSymbolLayer::setStrokeColor( const QColor & )
+{
+
+}
+
+QColor QgsSymbolLayer::strokeColor() const
+{
+  return QColor();
+}
+
+void QgsSymbolLayer::setFillColor( const QColor & )
+{
+}
+
+QColor QgsSymbolLayer::fillColor() const
+{
+  return QColor();
 }
 
 void QgsSymbolLayer::prepareExpressions( const QgsSymbolRenderContext &context )
@@ -553,7 +593,7 @@ void QgsMarkerSymbolLayer::markerOffset( QgsSymbolRenderContext &context, double
   if ( mDataDefinedProperties.isActive( QgsSymbolLayer::PropertyHorizontalAnchor ) )
   {
     QVariant exprVal = mDataDefinedProperties.value( QgsSymbolLayer::PropertyHorizontalAnchor, context.renderContext().expressionContext() );
-    if ( !exprVal.isNull() )
+    if ( !QgsVariantUtils::isNull( exprVal ) )
     {
       horizontalAnchorPoint = decodeHorizontalAnchorPoint( exprVal.toString() );
     }
@@ -561,7 +601,7 @@ void QgsMarkerSymbolLayer::markerOffset( QgsSymbolRenderContext &context, double
   if ( mDataDefinedProperties.isActive( QgsSymbolLayer::PropertyVerticalAnchor ) )
   {
     QVariant exprVal = mDataDefinedProperties.value( QgsSymbolLayer::PropertyVerticalAnchor, context.renderContext().expressionContext() );
-    if ( !exprVal.isNull() )
+    if ( !QgsVariantUtils::isNull( exprVal ) )
     {
       verticalAnchorPoint = decodeVerticalAnchorPoint( exprVal.toString() );
     }
@@ -681,6 +721,7 @@ QgsMapUnitScale QgsMarkerSymbolLayer::mapUnitScale() const
 void QgsLineSymbolLayer::setOutputUnit( QgsUnitTypes::RenderUnit unit )
 {
   mWidthUnit = unit;
+  mOffsetUnit = unit;
 }
 
 QgsUnitTypes::RenderUnit QgsLineSymbolLayer::outputUnit() const
@@ -774,7 +815,7 @@ double QgsLineSymbolLayer::width( const QgsRenderContext &context ) const
 double QgsLineSymbolLayer::dxfWidth( const QgsDxfExport &e, QgsSymbolRenderContext &context ) const
 {
   Q_UNUSED( context )
-  return width() * e.mapUnitScaleFactor( e.symbologyScale(), widthUnit(), e.mapUnits(), context.renderContext().mapToPixel().mapUnitsPerPixel() );
+  return width() * QgsDxfExport::mapUnitScaleFactor( e.symbologyScale(), widthUnit(), e.mapUnits(), context.renderContext().mapToPixel().mapUnitsPerPixel() );
 }
 
 
@@ -866,3 +907,26 @@ QList<QgsSymbolLayerReference> QgsSymbolLayer::masks() const
   return {};
 }
 
+void QgsSymbolLayer::prepareMasks( const QgsSymbolRenderContext &context )
+{
+  mClipPath.clear();
+
+  const QgsRenderContext &renderContext = context.renderContext();
+  const QList<QPainterPath> clipPaths = renderContext.symbolLayerClipPaths( this );
+  if ( !clipPaths.isEmpty() )
+  {
+    QPainterPath mergedPaths;
+    mergedPaths.setFillRule( Qt::WindingFill );
+    for ( QPainterPath path : clipPaths )
+    {
+      mergedPaths.addPath( path );
+    }
+
+    if ( !mergedPaths.isEmpty() )
+    {
+      mClipPath.addRect( 0, 0, renderContext.outputSize().width(),
+                         renderContext.outputSize().height() );
+      mClipPath = mClipPath.subtracted( mergedPaths );
+    }
+  }
+}

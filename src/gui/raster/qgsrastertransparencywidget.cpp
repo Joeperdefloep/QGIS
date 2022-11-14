@@ -130,10 +130,6 @@ void QgsRasterTransparencyWidget::syncToLayer()
 
     cboxTransparencyBand->setShowNotSetOption( true, tr( "None" ) );
     cboxTransparencyBand->setLayer( mRasterLayer );
-
-    mOpacityWidget->setOpacity( renderer->opacity() );
-
-    cboxTransparencyBand->setBand( renderer->alphaBand() );
   }
 
   if ( mRasterLayer->dataProvider()->sourceHasNoDataValue( 1 ) )
@@ -158,6 +154,10 @@ void QgsRasterTransparencyWidget::syncToLayer()
       mNodataColorButton->setColor( renderer->nodataColor() );
     else
       mNodataColorButton->setToNull();
+
+    mOpacityWidget->setOpacity( renderer->opacity() );
+
+    cboxTransparencyBand->setBand( renderer->alphaBand() );
   }
 
   const QgsRasterRangeList noDataRangeList = mRasterLayer->dataProvider()->userNoDataValues( 1 );
@@ -582,7 +582,7 @@ void QgsRasterTransparencyWidget::pixelSelected( const QgsPointXY &canvasPoint )
       const int bandNo = bands.value( i );
       if ( myPixelMap.count( bandNo ) == 1 )
       {
-        if ( myPixelMap.value( bandNo ).isNull() )
+        if ( QgsVariantUtils::isNull( myPixelMap.value( bandNo ) ) )
         {
           return; // Don't add nodata, transparent anyway
         }

@@ -18,10 +18,7 @@
 
 #include "qgslayertree.h"
 #include "qgslogger.h"
-#include "qgspluginlayer.h"
-#include "qgsrasterdataprovider.h"
 #include "qgsrasterlayer.h"
-#include "qgsvectordataprovider.h"
 #include "qgsvectorlayer.h"
 #include "qgsmeshlayer.h"
 
@@ -105,6 +102,7 @@ QgsMimeDataUtils::Uri::Uri( QgsMapLayer *layer )
     }
 
     case QgsMapLayerType::PluginLayer:
+    case QgsMapLayerType::GroupLayer:
     case QgsMapLayerType::AnnotationLayer:
     {
       // plugin layers do not have a standard way of storing their URI...

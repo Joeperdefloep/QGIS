@@ -272,7 +272,7 @@ class CORE_EXPORT QgsProcessingUtils
      * URI for the resultant layer. It may be updated in place to reflect the actual destination
      * for the layer.
      *
-     * Sink parameters such as desired \a encoding, \a fields, \a geometryType and \a crs must be specified.
+     * Sink parameters such as desired \a fields, \a geometryType and \a crs must be specified.
      *
      * The \a createOptions map can be used to specify additional sink creation options, which
      * are passed to the underlying provider when creating new layers. Known options also
@@ -464,6 +464,7 @@ class CORE_EXPORT QgsProcessingUtils
      * a fallback value of "gpkg".
      *
      * \see defaultRasterExtension()
+     * \see defaultPointCloudExtension()
      * \since QGIS 3.10
      */
     static QString defaultVectorExtension();
@@ -476,9 +477,30 @@ class CORE_EXPORT QgsProcessingUtils
      * a fallback value of "tif".
      *
      * \see defaultVectorExtension()
+     * \see defaultPointCloudExtension()
      * \since QGIS 3.10
      */
     static QString defaultRasterExtension();
+
+    /**
+     * Returns the default point cloud extension to use, in the absence of all other constraints (e.g.
+     * provider based support for extensions).
+     *
+     * This method returns a fallback value of "las".
+     *
+     * \see defaultVectorExtension()
+     * \see defaultRasterExtension()
+     * \since QGIS 3.24
+     */
+    static QString defaultPointCloudExtension();
+
+    /**
+     * Removes any raw pointer values from an input \a map, replacing them with
+     * appropriate string values where possible.
+     *
+     * \since QGIS 3.26
+     */
+    static QVariantMap removePointerValuesFromMap( const QVariantMap &map );
 
   private:
     static bool canUseLayer( const QgsRasterLayer *layer );

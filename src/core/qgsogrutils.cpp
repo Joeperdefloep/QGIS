@@ -35,6 +35,9 @@
 #include "qgsfillsymbol.h"
 #include "qgslinesymbol.h"
 #include "qgsmarkersymbol.h"
+#include "qgsfielddomain.h"
+#include "qgsfontmanager.h"
+#include "qgsvariantutils.h"
 
 #include <QTextCodec>
 #include <QUuid>
@@ -49,28 +52,28 @@
 #include "ogr_srs_api.h"
 
 
-void gdal::OGRDataSourceDeleter::operator()( OGRDataSourceH source )
+void gdal::OGRDataSourceDeleter::operator()( OGRDataSourceH source ) const
 {
   OGR_DS_Destroy( source );
 }
 
 
-void gdal::OGRGeometryDeleter::operator()( OGRGeometryH geometry )
+void gdal::OGRGeometryDeleter::operator()( OGRGeometryH geometry ) const
 {
   OGR_G_DestroyGeometry( geometry );
 }
 
-void gdal::OGRFldDeleter::operator()( OGRFieldDefnH definition )
+void gdal::OGRFldDeleter::operator()( OGRFieldDefnH definition ) const
 {
   OGR_Fld_Destroy( definition );
 }
 
-void gdal::OGRFeatureDeleter::operator()( OGRFeatureH feature )
+void gdal::OGRFeatureDeleter::operator()( OGRFeatureH feature ) const
 {
   OGR_F_Destroy( feature );
 }
 
-void gdal::GDALDatasetCloser::operator()( GDALDatasetH dataset )
+void gdal::GDALDatasetCloser::operator()( GDALDatasetH dataset ) const
 {
   GDALClose( dataset );
 }
@@ -95,7 +98,7 @@ void gdal::fast_delete_and_close( gdal::dataset_unique_ptr &dataset, GDALDriverH
 }
 
 
-void gdal::GDALWarpOptionsDeleter::operator()( GDALWarpOptions *options )
+void gdal::GDALWarpOptionsDeleter::operator()( GDALWarpOptions *options ) const
 {
   GDALDestroyWarpOptions( options );
 }
@@ -181,6 +184,71 @@ QVariant QgsOgrUtils::OGRFieldtoVariant( const OGRField *value, OGRFieldType typ
     }
   }
   return QVariant();
+}
+
+std::unique_ptr< OGRField > QgsOgrUtils::variantToOGRField( const QVariant &value )
+{
+  std::unique_ptr< OGRField > res = std::make_unique< OGRField >();
+
+  switch ( value.type() )
+  {
+    case QVariant::Invalid:
+      OGR_RawField_SetUnset( res.get() );
+      break;
+    case QVariant::Bool:
+      res->Integer = value.toBool() ? 1 : 0;
+      break;
+    case QVariant::Int:
+      res->Integer = value.toInt();
+      break;
+    case QVariant::LongLong:
+      res->Integer64 = value.toLongLong();
+      break;
+    case QVariant::Double:
+      res->Real = value.toDouble();
+      break;
+    case QVariant::Char:
+    case QVariant::String:
+      res->String = CPLStrdup( value.toString().toUtf8().constData() );
+      break;
+    case QVariant::Date:
+    {
+      const QDate date = value.toDate();
+      res->Date.Day = date.day();
+      res->Date.Month = date.month();
+      res->Date.Year = date.year();
+      res->Date.TZFlag = 0;
+      break;
+    }
+    case QVariant::Time:
+    {
+      const QTime time = value.toTime();
+      res->Date.Hour = time.hour();
+      res->Date.Minute = time.minute();
+      res->Date.Second = time.second() + static_cast< double >( time.msec() ) / 1000;
+      res->Date.TZFlag = 0;
+      break;
+    }
+    case QVariant::DateTime:
+    {
+      const QDateTime dateTime = value.toDateTime();
+      res->Date.Day = dateTime.date().day();
+      res->Date.Month = dateTime.date().month();
+      res->Date.Year = dateTime.date().year();
+      res->Date.Hour = dateTime.time().hour();
+      res->Date.Minute = dateTime.time().minute();
+      res->Date.Second = dateTime.time().second() + static_cast< double >( dateTime.time().msec() ) / 1000;
+      res->Date.TZFlag = 0;
+      break;
+    }
+
+    default:
+      QgsDebugMsg( "Unhandled variant type in variantToOGRField" );
+      OGR_RawField_SetUnset( res.get() );
+      break;
+  }
+
+  return res;
 }
 
 QgsFeature QgsOgrUtils::readOgrFeature( OGRFeatureH ogrFet, const QgsFields &fields, QTextCodec *encoding )
@@ -537,7 +605,7 @@ bool QgsOgrUtils::readOgrFeatureGeometry( OGRFeatureH ogrFet, QgsFeature &featur
 
 std::unique_ptr< QgsPoint > ogrGeometryToQgsPoint( OGRGeometryH geom )
 {
-  QgsWkbTypes::Type wkbType = static_cast<QgsWkbTypes::Type>( OGR_G_GetGeometryType( geom ) );
+  QgsWkbTypes::Type wkbType = QgsOgrUtils::ogrGeometryTypeToQgsWkbType( OGR_G_GetGeometryType( geom ) );
 
   double x, y, z, m;
   OGR_G_GetPointZM( geom, 0, &x, &y, &z, &m );
@@ -560,7 +628,7 @@ std::unique_ptr< QgsMultiPoint > ogrGeometryToQgsMultiPoint( OGRGeometryH geom )
 
 std::unique_ptr< QgsLineString > ogrGeometryToQgsLineString( OGRGeometryH geom )
 {
-  QgsWkbTypes::Type wkbType = static_cast<QgsWkbTypes::Type>( OGR_G_GetGeometryType( geom ) );
+  QgsWkbTypes::Type wkbType = QgsOgrUtils::ogrGeometryTypeToQgsWkbType( OGR_G_GetGeometryType( geom ) );
 
   int count = OGR_G_GetPointCount( geom );
   QVector< double > x( count );
@@ -929,8 +997,10 @@ QgsFields QgsOgrUtils::stringToFields( const QString &string, QTextCodec *encodi
 
 QStringList QgsOgrUtils::cStringListToQStringList( char **stringList )
 {
-  QStringList strings;
+  if ( !stringList )
+    return {};
 
+  QStringList strings;
   // presume null terminated string list
   for ( qgssize i = 0; stringList[i]; ++i )
   {
@@ -962,24 +1032,76 @@ QgsCoordinateReferenceSystem QgsOgrUtils::OGRSpatialReferenceToCrs( OGRSpatialRe
   if ( wkt.isEmpty() )
     return QgsCoordinateReferenceSystem();
 
+  const char *authorityName = OSRGetAuthorityName( srs, nullptr );
+  const char *authorityCode = OSRGetAuthorityCode( srs, nullptr );
+  QgsCoordinateReferenceSystem res;
+  if ( authorityName && authorityCode )
+  {
+    QString authId = QString( authorityName ) + ':' + QString( authorityCode );
+    OGRSpatialReferenceH ogrSrsTmp = OSRNewSpatialReference( nullptr );
+    // Check that the CRS build from authId and the input one are the "same".
+    if ( OSRSetFromUserInput( ogrSrsTmp, authId.toUtf8().constData() ) != OGRERR_NONE &&
+         OSRIsSame( srs, ogrSrsTmp ) )
+    {
+      res = QgsCoordinateReferenceSystem();
+      res.createFromUserInput( authId );
+    }
+    OSRDestroySpatialReference( ogrSrsTmp );
+  }
+  if ( !res.isValid() )
+    res = QgsCoordinateReferenceSystem::fromWkt( wkt );
+
 #if GDAL_VERSION_NUM >= GDAL_COMPUTE_VERSION(3,4,0)
-  QgsCoordinateReferenceSystem res = QgsCoordinateReferenceSystem::fromWkt( wkt );
   const double coordinateEpoch = OSRGetCoordinateEpoch( srs );
   if ( coordinateEpoch > 0 )
     res.setCoordinateEpoch( coordinateEpoch );
-  return res;
-#else
-  return QgsCoordinateReferenceSystem::fromWkt( wkt );
 #endif
+  return res;
 }
 
 OGRSpatialReferenceH QgsOgrUtils::crsToOGRSpatialReference( const QgsCoordinateReferenceSystem &crs )
 {
   if ( crs.isValid() )
   {
-    const QString srsWkt = crs.toWkt( QgsCoordinateReferenceSystem::WKT_PREFERRED_GDAL );
+    OGRSpatialReferenceH ogrSrs = nullptr;
 
-    if ( OGRSpatialReferenceH ogrSrs = OSRNewSpatialReference( srsWkt.toLocal8Bit().constData() ) )
+    // First try instantiating the CRS from its authId. This will give a
+    // more complete representation of the CRS for GDAL. In particular it might
+    // help a few drivers to get the datum code, that would be missing in WKT-2.
+    // See https://github.com/OSGeo/gdal/pull/5218
+    const QString authId = crs.authid();
+    const QString srsWkt = crs.toWkt( QgsCoordinateReferenceSystem::WKT_PREFERRED_GDAL );
+    if ( !authId.isEmpty() )
+    {
+      ogrSrs = OSRNewSpatialReference( nullptr );
+      if ( OSRSetFromUserInput( ogrSrs, authId.toUtf8().constData() ) == OGRERR_NONE )
+      {
+        // Check that the CRS build from WKT and authId are the "same".
+        OGRSpatialReferenceH ogrSrsFromWkt = OSRNewSpatialReference( srsWkt.toUtf8().constData() );
+        if ( ogrSrsFromWkt )
+        {
+          if ( !OSRIsSame( ogrSrs, ogrSrsFromWkt ) )
+          {
+            OSRDestroySpatialReference( ogrSrs );
+            ogrSrs = ogrSrsFromWkt;
+          }
+          else
+          {
+            OSRDestroySpatialReference( ogrSrsFromWkt );
+          }
+        }
+      }
+      else
+      {
+        OSRDestroySpatialReference( ogrSrs );
+        ogrSrs = nullptr;
+      }
+    }
+    if ( !ogrSrs )
+    {
+      ogrSrs = OSRNewSpatialReference( srsWkt.toUtf8().constData() );
+    }
+    if ( ogrSrs )
     {
       OSRSetAxisMappingStrategy( ogrSrs, OAMS_TRADITIONAL_GIS_ORDER );
 #if GDAL_VERSION_NUM >= GDAL_COMPUTE_VERSION(3,4,0)
@@ -1006,170 +1128,16 @@ QString QgsOgrUtils::readShapefileEncoding( const QString &path )
 
 QString QgsOgrUtils::readShapefileEncodingFromCpg( const QString &path )
 {
-#if GDAL_VERSION_NUM >= GDAL_COMPUTE_VERSION(3,1,0)
   QString errCause;
   QgsOgrLayerUniquePtr layer = QgsOgrProviderUtils::getLayer( path, false, QStringList(), 0, errCause, false );
   return layer ? layer->GetMetadataItem( QStringLiteral( "ENCODING_FROM_CPG" ), QStringLiteral( "SHAPEFILE" ) ) : QString();
-#else
-  if ( !QFileInfo::exists( path ) )
-    return QString();
-
-  // first try to read cpg file, if present
-  const QFileInfo fi( path );
-  const QString baseName = fi.completeBaseName();
-  const QString cpgPath = fi.dir().filePath( QStringLiteral( "%1.%2" ).arg( baseName, fi.suffix() == QLatin1String( "SHP" ) ? QStringLiteral( "CPG" ) : QStringLiteral( "cpg" ) ) );
-  if ( QFile::exists( cpgPath ) )
-  {
-    QFile cpgFile( cpgPath );
-    if ( cpgFile.open( QIODevice::ReadOnly ) )
-    {
-      QTextStream cpgStream( &cpgFile );
-      const QString cpgString = cpgStream.readLine();
-      cpgFile.close();
-
-      if ( !cpgString.isEmpty() )
-      {
-        // from OGRShapeLayer::ConvertCodePage
-        // https://github.com/OSGeo/gdal/blob/master/gdal/ogr/ogrsf_frmts/shape/ogrshapelayer.cpp#L342
-        bool ok = false;
-        int cpgCodePage = cpgString.toInt( &ok );
-        if ( ok && ( ( cpgCodePage >= 437 && cpgCodePage <= 950 )
-                     || ( cpgCodePage >= 1250 && cpgCodePage <= 1258 ) ) )
-        {
-          return QStringLiteral( "CP%1" ).arg( cpgCodePage );
-        }
-        else if ( cpgString.startsWith( QLatin1String( "8859" ) ) )
-        {
-          if ( cpgString.length() > 4 && cpgString.at( 4 ) == '-' )
-            return QStringLiteral( "ISO-8859-%1" ).arg( cpgString.mid( 5 ) );
-          else
-            return QStringLiteral( "ISO-8859-%1" ).arg( cpgString.mid( 4 ) );
-        }
-        else if ( cpgString.startsWith( QLatin1String( "UTF-8" ), Qt::CaseInsensitive ) ||
-                  cpgString.startsWith( QLatin1String( "UTF8" ), Qt::CaseInsensitive ) )
-          return QStringLiteral( "UTF-8" );
-        else if ( cpgString.startsWith( QLatin1String( "ANSI 1251" ), Qt::CaseInsensitive ) )
-          return QStringLiteral( "CP1251" );
-
-        return cpgString;
-      }
-    }
-  }
-
-  return QString();
-#endif
 }
 
 QString QgsOgrUtils::readShapefileEncodingFromLdid( const QString &path )
 {
-#if GDAL_VERSION_NUM >= GDAL_COMPUTE_VERSION(3,1,0)
   QString errCause;
   QgsOgrLayerUniquePtr layer = QgsOgrProviderUtils::getLayer( path, false, QStringList(), 0, errCause, false );
   return layer ? layer->GetMetadataItem( QStringLiteral( "ENCODING_FROM_LDID" ), QStringLiteral( "SHAPEFILE" ) ) : QString();
-#else
-  // from OGRShapeLayer::ConvertCodePage
-  // https://github.com/OSGeo/gdal/blob/master/gdal/ogr/ogrsf_frmts/shape/ogrshapelayer.cpp#L342
-
-  if ( !QFileInfo::exists( path ) )
-    return QString();
-
-  // first try to read cpg file, if present
-  const QFileInfo fi( path );
-  const QString baseName = fi.completeBaseName();
-
-  // fallback to LDID value, read from DBF file
-  const QString dbfPath = fi.dir().filePath( QStringLiteral( "%1.%2" ).arg( baseName, fi.suffix() == QLatin1String( "SHP" ) ? QStringLiteral( "DBF" ) : QStringLiteral( "dbf" ) ) );
-  if ( QFile::exists( dbfPath ) )
-  {
-    QFile dbfFile( dbfPath );
-    if ( dbfFile.open( QIODevice::ReadOnly ) )
-    {
-      dbfFile.read( 29 );
-      QDataStream dbfIn( &dbfFile );
-      dbfIn.setByteOrder( QDataStream::LittleEndian );
-      quint8 ldid;
-      dbfIn >> ldid;
-      dbfFile.close();
-
-      int nCP = -1;  // Windows code page.
-
-      // http://www.autopark.ru/ASBProgrammerGuide/DBFSTRUC.HTM
-      switch ( ldid )
-      {
-        case 1: nCP = 437;      break;
-        case 2: nCP = 850;      break;
-        case 3: nCP = 1252;     break;
-        case 4: nCP = 10000;    break;
-        case 8: nCP = 865;      break;
-        case 10: nCP = 850;     break;
-        case 11: nCP = 437;     break;
-        case 13: nCP = 437;     break;
-        case 14: nCP = 850;     break;
-        case 15: nCP = 437;     break;
-        case 16: nCP = 850;     break;
-        case 17: nCP = 437;     break;
-        case 18: nCP = 850;     break;
-        case 19: nCP = 932;     break;
-        case 20: nCP = 850;     break;
-        case 21: nCP = 437;     break;
-        case 22: nCP = 850;     break;
-        case 23: nCP = 865;     break;
-        case 24: nCP = 437;     break;
-        case 25: nCP = 437;     break;
-        case 26: nCP = 850;     break;
-        case 27: nCP = 437;     break;
-        case 28: nCP = 863;     break;
-        case 29: nCP = 850;     break;
-        case 31: nCP = 852;     break;
-        case 34: nCP = 852;     break;
-        case 35: nCP = 852;     break;
-        case 36: nCP = 860;     break;
-        case 37: nCP = 850;     break;
-        case 38: nCP = 866;     break;
-        case 55: nCP = 850;     break;
-        case 64: nCP = 852;     break;
-        case 77: nCP = 936;     break;
-        case 78: nCP = 949;     break;
-        case 79: nCP = 950;     break;
-        case 80: nCP = 874;     break;
-        case 87: return QStringLiteral( "ISO-8859-1" );
-        case 88: nCP = 1252;     break;
-        case 89: nCP = 1252;     break;
-        case 100: nCP = 852;     break;
-        case 101: nCP = 866;     break;
-        case 102: nCP = 865;     break;
-        case 103: nCP = 861;     break;
-        case 104: nCP = 895;     break;
-        case 105: nCP = 620;     break;
-        case 106: nCP = 737;     break;
-        case 107: nCP = 857;     break;
-        case 108: nCP = 863;     break;
-        case 120: nCP = 950;     break;
-        case 121: nCP = 949;     break;
-        case 122: nCP = 936;     break;
-        case 123: nCP = 932;     break;
-        case 124: nCP = 874;     break;
-        case 134: nCP = 737;     break;
-        case 135: nCP = 852;     break;
-        case 136: nCP = 857;     break;
-        case 150: nCP = 10007;   break;
-        case 151: nCP = 10029;   break;
-        case 200: nCP = 1250;    break;
-        case 201: nCP = 1251;    break;
-        case 202: nCP = 1254;    break;
-        case 203: nCP = 1253;    break;
-        case 204: nCP = 1257;    break;
-        default: break;
-      }
-
-      if ( nCP != -1 )
-      {
-        return QStringLiteral( "CP%1" ).arg( nCP );
-      }
-    }
-  }
-  return QString();
-#endif
 }
 
 QVariantMap QgsOgrUtils::parseStyleString( const QString &string )
@@ -1517,12 +1485,16 @@ std::unique_ptr<QgsSymbol> QgsOgrUtils::symbolFromStyleString( const QString &st
 
       bool familyFound = false;
       QString fontFamily;
+      QString matched;
       for ( const QString &family : std::as_const( families ) )
       {
-        if ( QgsFontUtils::fontFamilyMatchOnSystem( family ) )
+        const QString processedFamily = QgsApplication::fontManager()->processFontFamilyName( family );
+
+        if ( QgsFontUtils::fontFamilyMatchOnSystem( processedFamily ) ||
+             QgsApplication::fontManager()->tryToDownloadFontFamily( processedFamily, matched ) )
         {
           familyFound = true;
-          fontFamily = family;
+          fontFamily = processedFamily;
           break;
         }
       }
@@ -1731,3 +1703,500 @@ std::unique_ptr<QgsSymbol> QgsOgrUtils::symbolFromStyleString( const QString &st
 
   return nullptr;
 }
+
+void QgsOgrUtils::ogrFieldTypeToQVariantType( OGRFieldType ogrType, OGRFieldSubType ogrSubType, QVariant::Type &variantType, QVariant::Type &variantSubType )
+{
+  variantType = QVariant::Type::Invalid;
+  variantSubType = QVariant::Type::Invalid;
+
+  switch ( ogrType )
+  {
+    case OFTInteger:
+      if ( ogrSubType == OFSTBoolean )
+      {
+        variantType = QVariant::Bool;
+        ogrSubType = OFSTBoolean;
+      }
+      else
+        variantType = QVariant::Int;
+      break;
+    case OFTInteger64:
+      variantType = QVariant::LongLong;
+      break;
+    case OFTReal:
+      variantType = QVariant::Double;
+      break;
+    case OFTDate:
+      variantType = QVariant::Date;
+      break;
+    case OFTTime:
+      variantType = QVariant::Time;
+      break;
+    case OFTDateTime:
+      variantType = QVariant::DateTime;
+      break;
+
+    case OFTBinary:
+      variantType = QVariant::ByteArray;
+      break;
+
+    case OFTString:
+    case OFTWideString:
+      if ( ogrSubType == OFSTJSON )
+      {
+        ogrSubType = OFSTJSON;
+        variantType = QVariant::Map;
+        variantSubType = QVariant::String;
+      }
+      else
+      {
+        variantType = QVariant::String;
+      }
+      break;
+
+    case OFTStringList:
+    case OFTWideStringList:
+      variantType = QVariant::StringList;
+      variantSubType = QVariant::String;
+      break;
+
+    case OFTIntegerList:
+      variantType = QVariant::List;
+      variantSubType = QVariant::Int;
+      break;
+
+    case OFTRealList:
+      variantType = QVariant::List;
+      variantSubType = QVariant::Double;
+      break;
+
+    case OFTInteger64List:
+      variantType = QVariant::List;
+      variantSubType = QVariant::LongLong;
+      break;
+  }
+}
+
+void QgsOgrUtils::variantTypeToOgrFieldType( QVariant::Type variantType, OGRFieldType &ogrType, OGRFieldSubType &ogrSubType )
+{
+  ogrSubType = OFSTNone;
+  switch ( variantType )
+  {
+    case QVariant::Bool:
+      ogrType = OFTInteger;
+      ogrSubType = OFSTBoolean;
+      break;
+
+    case QVariant::Int:
+      ogrType = OFTInteger;
+      break;
+
+    case QVariant::LongLong:
+      ogrType = OFTInteger64;
+      break;
+
+    case QVariant::Double:
+      ogrType = OFTReal;
+      break;
+
+    case QVariant::Char:
+      ogrType = OFTString;
+      break;
+
+    case QVariant::String:
+      ogrType = OFTString;
+      break;
+
+    case QVariant::StringList:
+      ogrType = OFTStringList;
+      break;
+
+    case QVariant::ByteArray:
+      ogrType = OFTBinary;
+      break;
+
+    case QVariant::Date:
+      ogrType = OFTDate;
+      break;
+
+    case QVariant::Time:
+      ogrType = OFTTime;
+      break;
+    case QVariant::DateTime:
+      ogrType = OFTDateTime;
+      break;
+
+    default:
+      ogrType = OFTString;
+      break;
+  }
+}
+
+QVariant QgsOgrUtils::stringToVariant( OGRFieldType type, OGRFieldSubType, const QString &string )
+{
+  if ( string.isEmpty() )
+    return QVariant();
+
+  bool ok = false;
+  QVariant res;
+  switch ( type )
+  {
+    case OFTInteger:
+      res = string.toInt( &ok );
+      break;
+
+    case OFTInteger64:
+      res = string.toLongLong( &ok );
+      break;
+
+    case OFTReal:
+      res = string.toDouble( &ok );
+      break;
+
+    case OFTString:
+    case OFTWideString:
+      res = string;
+      ok = true;
+      break;
+
+    case OFTDate:
+      res = QDate::fromString( string, Qt::ISODate );
+      ok = res.isValid();
+      break;
+
+    case OFTTime:
+      res = QTime::fromString( string, Qt::ISODate );
+      ok = res.isValid();
+      break;
+
+    case OFTDateTime:
+      res = QDateTime::fromString( string, Qt::ISODate );
+      ok = res.isValid();
+      break;
+
+    default:
+      res = string;
+      ok = true;
+      break;
+  }
+
+  return ok ? res : QVariant();
+}
+
+QList<QgsVectorDataProvider::NativeType> QgsOgrUtils::nativeFieldTypesForDriver( GDALDriverH driver )
+{
+  if ( !driver )
+    return {};
+
+  const QString driverName = QString::fromUtf8( GDALGetDriverShortName( driver ) );
+
+  int nMaxIntLen = 11;
+  int nMaxInt64Len = 21;
+  int nMaxDoubleLen = 20;
+  int nMaxDoublePrec = 15;
+  int nDateLen = 8;
+  if ( driverName == QLatin1String( "GPKG" ) )
+  {
+    // GPKG only supports field length for text (and binary)
+    nMaxIntLen = 0;
+    nMaxInt64Len = 0;
+    nMaxDoubleLen = 0;
+    nMaxDoublePrec = 0;
+    nDateLen = 0;
+  }
+
+  QList<QgsVectorDataProvider::NativeType> nativeTypes;
+  nativeTypes
+      << QgsVectorDataProvider::NativeType( QgsVariantUtils::typeToDisplayString( QVariant::Int ), QStringLiteral( "integer" ), QVariant::Int, 0, nMaxIntLen )
+      << QgsVectorDataProvider::NativeType( QgsVariantUtils::typeToDisplayString( QVariant::LongLong ), QStringLiteral( "integer64" ), QVariant::LongLong, 0, nMaxInt64Len )
+      << QgsVectorDataProvider::NativeType( QObject::tr( "Decimal number (real)" ), QStringLiteral( "double" ), QVariant::Double, 0, nMaxDoubleLen, 0, nMaxDoublePrec )
+      << QgsVectorDataProvider::NativeType( QgsVariantUtils::typeToDisplayString( QVariant::String ), QStringLiteral( "string" ), QVariant::String, 0, 65535 );
+
+  if ( driverName == QLatin1String( "GPKG" ) )
+    nativeTypes << QgsVectorDataProvider::NativeType( QObject::tr( "JSON (string)" ), QStringLiteral( "JSON" ), QVariant::Map, 0, 0, 0, 0, QVariant::String );
+
+  bool supportsDate = true;
+  bool supportsTime = true;
+  bool supportsDateTime = true;
+  bool supportsBinary = false;
+  bool supportIntegerList = false;
+  bool supportInteger64List = false;
+  bool supportRealList = false;
+  bool supportsStringList = false;
+
+  // For drivers that advertise their data type, use that instead of the
+  // above hardcoded defaults.
+  if ( const char *pszDataTypes = GDALGetMetadataItem( driver, GDAL_DMD_CREATIONFIELDDATATYPES, nullptr ) )
+  {
+    char **papszTokens = CSLTokenizeString2( pszDataTypes, " ", 0 );
+    supportsDate = CSLFindString( papszTokens, "Date" ) >= 0;
+    supportsTime = CSLFindString( papszTokens, "Time" ) >= 0;
+    supportsDateTime = CSLFindString( papszTokens, "DateTime" ) >= 0;
+    supportsBinary = CSLFindString( papszTokens, "Binary" ) >= 0;
+    supportIntegerList = CSLFindString( papszTokens, "IntegerList" ) >= 0;
+    supportInteger64List = CSLFindString( papszTokens, "Integer64List" ) >= 0;
+    supportRealList = CSLFindString( papszTokens, "RealList" ) >= 0;
+    supportsStringList = CSLFindString( papszTokens, "StringList" ) >= 0;
+    CSLDestroy( papszTokens );
+  }
+
+  // Older versions of GDAL incorrectly report that shapefiles support
+  // DateTime.
+#if GDAL_VERSION_NUM < GDAL_COMPUTE_VERSION(3,2,0)
+  if ( driverName == QLatin1String( "ESRI Shapefile" ) )
+  {
+    supportsDateTime = false;
+  }
+#endif
+
+  if ( supportsDate )
+  {
+    nativeTypes
+        << QgsVectorDataProvider::NativeType( QgsVariantUtils::typeToDisplayString( QVariant::Date ), QStringLiteral( "date" ), QVariant::Date, nDateLen, nDateLen );
+  }
+  if ( supportsTime )
+  {
+    nativeTypes
+        << QgsVectorDataProvider::NativeType( QgsVariantUtils::typeToDisplayString( QVariant::Time ), QStringLiteral( "time" ), QVariant::Time );
+  }
+  if ( supportsDateTime )
+  {
+    nativeTypes
+        << QgsVectorDataProvider::NativeType( QgsVariantUtils::typeToDisplayString( QVariant::DateTime ), QStringLiteral( "datetime" ), QVariant::DateTime );
+  }
+  if ( supportsBinary )
+  {
+    nativeTypes
+        << QgsVectorDataProvider::NativeType( QgsVariantUtils::typeToDisplayString( QVariant::ByteArray ), QStringLiteral( "binary" ), QVariant::ByteArray );
+  }
+  if ( supportIntegerList )
+  {
+    nativeTypes
+        << QgsVectorDataProvider::NativeType( QgsVariantUtils::typeToDisplayString( QVariant::List, QVariant::Int ), QStringLiteral( "integerlist" ), QVariant::List, 0, 0, 0, 0, QVariant::Int );
+  }
+  if ( supportInteger64List )
+  {
+    nativeTypes
+        << QgsVectorDataProvider::NativeType( QgsVariantUtils::typeToDisplayString( QVariant::List, QVariant::LongLong ), QStringLiteral( "integer64list" ), QVariant::List, 0, 0, 0, 0, QVariant::LongLong );
+  }
+  if ( supportRealList )
+  {
+    nativeTypes
+        << QgsVectorDataProvider::NativeType( QgsVariantUtils::typeToDisplayString( QVariant::List, QVariant::Double ), QStringLiteral( "doublelist" ), QVariant::List, 0, 0, 0, 0, QVariant::Double );
+  }
+  if ( supportsStringList )
+  {
+    nativeTypes
+        << QgsVectorDataProvider::NativeType( QgsVariantUtils::typeToDisplayString( QVariant::StringList ), QStringLiteral( "stringlist" ), QVariant::List, 0, 0, 0, 0, QVariant::String );
+  }
+
+  const char *pszDataSubTypes = GDALGetMetadataItem( driver, GDAL_DMD_CREATIONFIELDDATASUBTYPES, nullptr );
+  if ( pszDataSubTypes && strstr( pszDataSubTypes, "Boolean" ) )
+  {
+    // boolean data type
+    nativeTypes
+        << QgsVectorDataProvider::NativeType( QObject::tr( "Boolean" ), QStringLiteral( "bool" ), QVariant::Bool );
+  }
+
+  return nativeTypes;
+}
+
+
+#if GDAL_VERSION_NUM >= GDAL_COMPUTE_VERSION(3,3,0)
+std::unique_ptr< QgsFieldDomain > QgsOgrUtils::convertFieldDomain( OGRFieldDomainH domain )
+{
+  if ( !domain )
+    return nullptr;
+
+  const QString name{ OGR_FldDomain_GetName( domain ) };
+  const QString description{ OGR_FldDomain_GetDescription( domain ) };
+
+  QVariant::Type fieldType = QVariant::Type::Invalid;
+  QVariant::Type fieldSubType = QVariant::Type::Invalid;
+  const OGRFieldType domainFieldType = OGR_FldDomain_GetFieldType( domain );
+  const OGRFieldSubType domainFieldSubType = OGR_FldDomain_GetFieldSubType( domain );
+  ogrFieldTypeToQVariantType( domainFieldType, domainFieldSubType, fieldType, fieldSubType );
+
+  std::unique_ptr< QgsFieldDomain > res;
+  switch ( OGR_FldDomain_GetDomainType( domain ) )
+  {
+    case OFDT_CODED:
+    {
+      QList< QgsCodedValue > values;
+      const OGRCodedValue *codedValue = OGR_CodedFldDomain_GetEnumeration( domain );
+      while ( codedValue && codedValue->pszCode )
+      {
+        const QString code( codedValue->pszCode );
+
+        // if pszValue is null then it indicates we are working with a set of acceptable values which aren't
+        // coded. In this case we copy the code as the value so that QGIS exposes the domain as a choice of
+        // the valid code values.
+        const QString value( codedValue->pszValue ? codedValue->pszValue : codedValue->pszCode );
+        values.append( QgsCodedValue( stringToVariant( domainFieldType, domainFieldSubType, code ), value ) );
+
+        codedValue++;
+      }
+
+      res = std::make_unique< QgsCodedFieldDomain >( name, description, fieldType, values );
+      break;
+    }
+
+    case OFDT_RANGE:
+    {
+      QVariant minValue;
+      bool minIsInclusive = false;
+      if ( const OGRField *min = OGR_RangeFldDomain_GetMin( domain, &minIsInclusive ) )
+      {
+        minValue = QgsOgrUtils::OGRFieldtoVariant( min, domainFieldType );
+      }
+      QVariant maxValue;
+      bool maxIsInclusive = false;
+      if ( const OGRField *max = OGR_RangeFldDomain_GetMax( domain, &maxIsInclusive ) )
+      {
+        maxValue = QgsOgrUtils::OGRFieldtoVariant( max, domainFieldType );
+      }
+
+      res = std::make_unique< QgsRangeFieldDomain >( name, description, fieldType,
+            minValue, minIsInclusive,
+            maxValue, maxIsInclusive );
+      break;
+    }
+
+    case OFDT_GLOB:
+      res = std::make_unique< QgsGlobFieldDomain >( name, description, fieldType,
+            QString( OGR_GlobFldDomain_GetGlob( domain ) ) );
+      break;
+  }
+
+  switch ( OGR_FldDomain_GetMergePolicy( domain ) )
+  {
+    case OFDMP_DEFAULT_VALUE:
+      res->setMergePolicy( Qgis::FieldDomainMergePolicy::DefaultValue );
+      break;
+    case OFDMP_SUM:
+      res->setMergePolicy( Qgis::FieldDomainMergePolicy::Sum );
+      break;
+    case OFDMP_GEOMETRY_WEIGHTED:
+      res->setMergePolicy( Qgis::FieldDomainMergePolicy::GeometryWeighted );
+      break;
+  }
+
+  switch ( OGR_FldDomain_GetSplitPolicy( domain ) )
+  {
+    case OFDSP_DEFAULT_VALUE:
+      res->setSplitPolicy( Qgis::FieldDomainSplitPolicy::DefaultValue );
+      break;
+    case OFDSP_DUPLICATE:
+      res->setSplitPolicy( Qgis::FieldDomainSplitPolicy::Duplicate );
+      break;
+    case OFDSP_GEOMETRY_RATIO:
+      res->setSplitPolicy( Qgis::FieldDomainSplitPolicy::GeometryRatio );
+      break;
+  }
+  return res;
+}
+
+OGRFieldDomainH QgsOgrUtils::convertFieldDomain( const QgsFieldDomain *domain )
+{
+  if ( !domain )
+    return nullptr;
+
+  OGRFieldType domainFieldType = OFTInteger;
+  OGRFieldSubType domainFieldSubType = OFSTNone;
+  variantTypeToOgrFieldType( domain->fieldType(), domainFieldType, domainFieldSubType );
+
+  OGRFieldDomainH res = nullptr;
+  switch ( domain->type() )
+  {
+    case Qgis::FieldDomainType::Coded:
+    {
+      std::vector< OGRCodedValue > enumeration;
+      const QList< QgsCodedValue> values = qgis::down_cast< const QgsCodedFieldDomain * >( domain )->values();
+      enumeration.reserve( values.size() );
+      for ( const QgsCodedValue &value : values )
+      {
+        OGRCodedValue codedValue;
+        codedValue.pszCode = CPLStrdup( value.code().toString().toUtf8().constData() );
+        codedValue.pszValue = CPLStrdup( value.value().toUtf8().constData() );
+        enumeration.push_back( codedValue );
+      }
+      OGRCodedValue last;
+      last.pszCode = nullptr;
+      last.pszValue = nullptr;
+      enumeration.push_back( last );
+      res = OGR_CodedFldDomain_Create(
+              domain->name().toUtf8().constData(),
+              domain->description().toUtf8().constData(),
+              domainFieldType,
+              domainFieldSubType,
+              enumeration.data()
+            );
+
+      for ( const OGRCodedValue &value : std::as_const( enumeration ) )
+      {
+        CPLFree( value.pszCode );
+        CPLFree( value.pszValue );
+      }
+      break;
+    }
+
+    case Qgis::FieldDomainType::Range:
+    {
+      std::unique_ptr< OGRField > min = variantToOGRField( qgis::down_cast< const QgsRangeFieldDomain * >( domain )->minimum() );
+      std::unique_ptr< OGRField > max = variantToOGRField( qgis::down_cast< const QgsRangeFieldDomain * >( domain )->maximum() );
+      res = OGR_RangeFldDomain_Create(
+              domain->name().toUtf8().constData(),
+              domain->description().toUtf8().constData(),
+              domainFieldType,
+              domainFieldSubType,
+              min.get(),
+              qgis::down_cast< const QgsRangeFieldDomain * >( domain )->minimumIsInclusive(),
+              max.get(),
+              qgis::down_cast< const QgsRangeFieldDomain * >( domain )->maximumIsInclusive()
+            );
+      break;
+    }
+
+    case Qgis::FieldDomainType::Glob:
+    {
+      res = OGR_GlobFldDomain_Create(
+              domain->name().toUtf8().constData(),
+              domain->description().toUtf8().constData(),
+              domainFieldType,
+              domainFieldSubType,
+              qgis::down_cast< const QgsGlobFieldDomain * >( domain )->glob().toUtf8().constData()
+            );
+      break;
+    }
+  }
+
+  switch ( domain->mergePolicy() )
+  {
+    case Qgis::FieldDomainMergePolicy::DefaultValue:
+      OGR_FldDomain_SetMergePolicy( res, OFDMP_DEFAULT_VALUE );
+      break;
+    case Qgis::FieldDomainMergePolicy::GeometryWeighted:
+      OGR_FldDomain_SetMergePolicy( res, OFDMP_GEOMETRY_WEIGHTED );
+      break;
+    case Qgis::FieldDomainMergePolicy::Sum:
+      OGR_FldDomain_SetMergePolicy( res, OFDMP_SUM );
+      break;
+  }
+
+  switch ( domain->splitPolicy() )
+  {
+    case Qgis::FieldDomainSplitPolicy::DefaultValue:
+      OGR_FldDomain_SetSplitPolicy( res, OFDSP_DEFAULT_VALUE );
+      break;
+    case Qgis::FieldDomainSplitPolicy::GeometryRatio:
+      OGR_FldDomain_SetSplitPolicy( res, OFDSP_GEOMETRY_RATIO );
+      break;
+    case Qgis::FieldDomainSplitPolicy::Duplicate:
+      OGR_FldDomain_SetSplitPolicy( res, OFDSP_DUPLICATE );
+      break;
+  }
+
+  return res;
+}
+
+#endif

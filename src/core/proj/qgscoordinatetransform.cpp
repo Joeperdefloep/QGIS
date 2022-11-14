@@ -59,13 +59,23 @@ QgsCoordinateTransform::QgsCoordinateTransform()
   d = new QgsCoordinateTransformPrivate();
 }
 
-QgsCoordinateTransform::QgsCoordinateTransform( const QgsCoordinateReferenceSystem &source, const QgsCoordinateReferenceSystem &destination, const QgsCoordinateTransformContext &context )
+QgsCoordinateTransform::QgsCoordinateTransform( const QgsCoordinateReferenceSystem &source, const QgsCoordinateReferenceSystem &destination, const QgsCoordinateTransformContext &context, Qgis::CoordinateTransformationFlags flags )
 {
   mContext = context;
   d = new QgsCoordinateTransformPrivate( source, destination, mContext );
+
+  if ( flags & Qgis::CoordinateTransformationFlag::IgnoreImpossibleTransformations )
+    mIgnoreImpossible = true;
+
 #ifdef QGISDEBUG
   mHasContext = true;
 #endif
+
+  if ( mIgnoreImpossible && !isTransformationPossible( source, destination ) )
+  {
+    d->invalidate();
+    return;
+  }
 
   if ( !d->checkValidity() )
     return;
@@ -77,9 +87,12 @@ QgsCoordinateTransform::QgsCoordinateTransform( const QgsCoordinateReferenceSyst
     addToCache();
   }
   Q_NOWARN_DEPRECATED_POP
+
+  if ( flags & Qgis::CoordinateTransformationFlag::BallparkTransformsAreAppropriate )
+    mBallparkTransformsAreAppropriate = true;
 }
 
-QgsCoordinateTransform::QgsCoordinateTransform( const QgsCoordinateReferenceSystem &source, const QgsCoordinateReferenceSystem &destination, const QgsProject *project )
+QgsCoordinateTransform::QgsCoordinateTransform( const QgsCoordinateReferenceSystem &source, const QgsCoordinateReferenceSystem &destination, const QgsProject *project, Qgis::CoordinateTransformationFlags flags )
 {
   mContext = project ? project->transformContext() : QgsCoordinateTransformContext();
   d = new QgsCoordinateTransformPrivate( source, destination, mContext );
@@ -88,6 +101,15 @@ QgsCoordinateTransform::QgsCoordinateTransform( const QgsCoordinateReferenceSyst
     mHasContext = true;
 #endif
 
+  if ( flags & Qgis::CoordinateTransformationFlag::IgnoreImpossibleTransformations )
+    mIgnoreImpossible = true;
+
+  if ( mIgnoreImpossible && !isTransformationPossible( source, destination ) )
+  {
+    d->invalidate();
+    return;
+  }
+
   if ( !d->checkValidity() )
     return;
 
@@ -98,6 +120,9 @@ QgsCoordinateTransform::QgsCoordinateTransform( const QgsCoordinateReferenceSyst
     addToCache();
   }
   Q_NOWARN_DEPRECATED_POP
+
+  if ( flags & Qgis::CoordinateTransformationFlag::BallparkTransformsAreAppropriate )
+    mBallparkTransformsAreAppropriate = true;
 }
 
 QgsCoordinateTransform::QgsCoordinateTransform( const QgsCoordinateReferenceSystem &source, const QgsCoordinateReferenceSystem &destination, int sourceDatumTransform, int destinationDatumTransform )
@@ -142,10 +167,30 @@ QgsCoordinateTransform &QgsCoordinateTransform::operator=( const QgsCoordinateTr
 
 QgsCoordinateTransform::~QgsCoordinateTransform() {} //NOLINT
 
+bool QgsCoordinateTransform::isTransformationPossible( const QgsCoordinateReferenceSystem &source, const QgsCoordinateReferenceSystem &destination )
+{
+  if ( !source.isValid() || !destination.isValid() )
+    return false;
+
+#if PROJ_VERSION_MAJOR>8 || (PROJ_VERSION_MAJOR==8 && PROJ_VERSION_MINOR>=1)
+  if ( source.celestialBodyName() != destination.celestialBodyName() )
+    return false;
+#endif
+
+  return true;
+}
+
 void QgsCoordinateTransform::setSourceCrs( const QgsCoordinateReferenceSystem &crs )
 {
   d.detach();
   d->mSourceCRS = crs;
+
+  if ( mIgnoreImpossible && !isTransformationPossible( d->mSourceCRS, d->mDestCRS ) )
+  {
+    d->invalidate();
+    return;
+  }
+
   if ( !d->checkValidity() )
     return;
 
@@ -162,6 +207,13 @@ void QgsCoordinateTransform::setDestinationCrs( const QgsCoordinateReferenceSyst
 {
   d.detach();
   d->mDestCRS = crs;
+
+  if ( mIgnoreImpossible && !isTransformationPossible( d->mSourceCRS, d->mDestCRS ) )
+  {
+    d->invalidate();
+    return;
+  }
+
   if ( !d->checkValidity() )
     return;
 
@@ -182,6 +234,13 @@ void QgsCoordinateTransform::setContext( const QgsCoordinateTransformContext &co
 #ifdef QGISDEBUG
   mHasContext = true;
 #endif
+
+  if ( mIgnoreImpossible && !isTransformationPossible( d->mSourceCRS, d->mDestCRS ) )
+  {
+    d->invalidate();
+    return;
+  }
+
   if ( !d->checkValidity() )
     return;
 
@@ -514,14 +573,40 @@ QgsRectangle QgsCoordinateTransform::transformBoundingBox( const QgsRectangle &r
     return QgsRectangle( p, p );
   }
 
+  double yMin = rect.yMinimum();
+  double yMax = rect.yMaximum();
+  if ( d->mGeographicToWebMercator &&
+       ( ( direction == Qgis::TransformDirection::Forward && !d->mIsReversed ) ||
+         ( direction == Qgis::TransformDirection::Reverse && d->mIsReversed ) ) )
+  {
+    // Latitudes close to 90 degree project to infinite northing in theory.
+    // We limit to 90 - 1e-1 which reproject to northing of ~ 44e6 m (about twice
+    // the maximum easting of ~20e6 m).
+    // For reference, GoogleMercator tiles are limited to a northing ~85 deg / ~20e6 m
+    // so limiting to 90 - 1e-1 is reasonable.
+    constexpr double EPS = 1e-1;
+    if ( yMin < -90 + EPS )
+    {
+      if ( yMax < -90 + EPS )
+        throw QgsCsException( QObject::tr( "Could not transform bounding box to target CRS" ) );
+      yMin = -90 + EPS;
+    }
+    if ( yMax > 90 - EPS )
+    {
+      if ( yMin > 90 - EPS )
+        throw QgsCsException( QObject::tr( "Could not transform bounding box to target CRS" ) );
+      yMax = 90 - EPS;
+    }
+  }
+
   // 64 points (<=2.12) is not enough, see #13665, for EPSG:4326 -> EPSG:3574 (say that it is a hard one),
   // are decent result from about 500 points and more. This method is called quite often, but
   // even with 1000 points it takes < 1ms.
   // TODO: how to effectively and precisely reproject bounding box?
   const int nPoints = 1000;
-  const double d = std::sqrt( ( rect.width() * rect.height() ) / std::pow( std::sqrt( static_cast< double >( nPoints ) ) - 1, 2.0 ) );
+  const double d = std::sqrt( ( rect.width() * ( yMax - yMin ) ) / std::pow( std::sqrt( static_cast< double >( nPoints ) ) - 1, 2.0 ) );
   const int nXPoints = std::min( static_cast< int >( std::ceil( rect.width() / d ) ) + 1, 1000 );
-  const int nYPoints = std::min( static_cast< int >( std::ceil( rect.height() / d ) ) + 1, 1000 );
+  const int nYPoints = std::min( static_cast< int >( std::ceil( ( yMax - yMin ) / d ) ) + 1, 1000 );
 
   QgsRectangle bb_rect;
   bb_rect.setMinimal();
@@ -537,9 +622,9 @@ QgsRectangle QgsCoordinateTransform::transformBoundingBox( const QgsRectangle &r
   // Populate the vectors
 
   const double dx = rect.width()  / static_cast< double >( nXPoints - 1 );
-  const double dy = rect.height() / static_cast< double >( nYPoints - 1 );
+  const double dy = ( yMax - yMin ) / static_cast< double >( nYPoints - 1 );
 
-  double pointY = rect.yMinimum();
+  double pointY = yMin;
 
   for ( int i = 0; i < nYPoints ; i++ )
   {
@@ -774,14 +859,7 @@ void QgsCoordinateTransform::transformCoords( int numPoints, double *x, double *
 
     for ( int i = 0; i < numPoints; ++i )
     {
-      if ( direction == Qgis::TransformDirection::Forward )
-      {
-        points += QStringLiteral( "(%1, %2)\n" ).arg( x[i], 0, 'f' ).arg( y[i], 0, 'f' );
-      }
-      else
-      {
-        points += QStringLiteral( "(%1, %2)\n" ).arg( x[i], 0, 'f' ).arg( y[i], 0, 'f' );
-      }
+      points += QStringLiteral( "(%1, %2)\n" ).arg( x[i], 0, 'f' ).arg( y[i], 0, 'f' );
     }
 
     const QString dir = ( direction == Qgis::TransformDirection::Forward ) ? QObject::tr( "forward transform" ) : QObject::tr( "inverse transform" );

@@ -185,7 +185,7 @@ const QgsProcessingParameterDefinition *QgsAbstractProcessingParameterWidgetWrap
 
 void QgsAbstractProcessingParameterWidgetWrapper::setParameterValue( const QVariant &value, QgsProcessingContext &context )
 {
-  if ( mPropertyButton && value.canConvert< QgsProperty >() )
+  if ( mPropertyButton && value.userType() == QMetaType::type( "QgsProperty" ) )
   {
     mPropertyButton->setToProperty( value.value< QgsProperty >() );
   }
@@ -332,7 +332,7 @@ void QgsAbstractProcessingParameterWidgetWrapper::setDynamicParentLayerParameter
     }
 
     QVariant val = parentWrapper->parameterValue();
-    if ( val.canConvert<QgsProcessingFeatureSourceDefinition>() )
+    if ( val.userType() == QMetaType::type( "QgsProcessingFeatureSourceDefinition" ) )
     {
       // input is a QgsProcessingFeatureSourceDefinition - get extra properties from it
       const QgsProcessingFeatureSourceDefinition fromVar = qvariant_cast<QgsProcessingFeatureSourceDefinition>( val );
@@ -368,6 +368,12 @@ QgsProcessingModelerParameterWidget *QgsProcessingParameterWidgetFactoryInterfac
   std::unique_ptr< QgsProcessingModelerParameterWidget > widget = std::make_unique< QgsProcessingModelerParameterWidget >( model, childId, parameter, context );
   widget->populateSources( compatibleParameterTypes(), compatibleOutputTypes(), compatibleDataTypes( parameter ) );
   widget->setExpressionHelpText( modelerExpressionFormatString() );
+
+  if ( parameter->isDestination() )
+    widget->setSourceType( QgsProcessingModelChildParameterSource::ModelOutput );
+  else
+    widget->setSourceType( defaultModelSource( parameter ) );
+
   return widget.release();
 }
 
@@ -386,6 +392,11 @@ QList<int> QgsProcessingParameterWidgetFactoryInterface::compatibleDataTypes( co
 QString QgsProcessingParameterWidgetFactoryInterface::modelerExpressionFormatString() const
 {
   return QString();
+}
+
+QgsProcessingModelChildParameterSource::Source QgsProcessingParameterWidgetFactoryInterface::defaultModelSource( const QgsProcessingParameterDefinition * ) const
+{
+  return QgsProcessingModelChildParameterSource::StaticValue;
 }
 
 //

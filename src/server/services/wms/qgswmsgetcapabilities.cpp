@@ -32,6 +32,7 @@
 #include "qgslayoutpagecollection.h"
 
 #include "qgsmaplayerstylemanager.h"
+#include "qgsmaplayertemporalproperties.h"
 
 #include "qgsexception.h"
 #include "qgsexpressionnodeimpl.h"
@@ -716,6 +717,7 @@ namespace QgsWms
 
         QDomElement composerMapElem = doc.createElement( QStringLiteral( "ComposerMap" ) );
         composerMapElem.setAttribute( QStringLiteral( "name" ), QStringLiteral( "map%1" ).arg( mapId ) );
+        composerMapElem.setAttribute( QStringLiteral( "itemName" ), composerMap->displayName() );
         mapId++;
         composerMapElem.setAttribute( QStringLiteral( "width" ), composerMap->rect().width() );
         composerMapElem.setAttribute( QStringLiteral( "height" ), composerMap->rect().height() );
@@ -1209,6 +1211,8 @@ namespace QgsWms
             layerElem.appendChild( metaUrlElem );
           }
 
+          bool timeDimensionAdded { false };
+
           // Add dimensions
           if ( l->type() == QgsMapLayerType::VectorLayer )
           {
@@ -1217,6 +1221,7 @@ namespace QgsWms
             const QList<QgsMapLayerServerProperties::WmsDimensionInfo> wmsDims = serverProperties->wmsDimensions();
             for ( const  QgsMapLayerServerProperties::WmsDimensionInfo &dim : wmsDims )
             {
+
               int fieldIndex = vl->fields().indexOf( dim.fieldName );
               // Check field index
               if ( fieldIndex == -1 )
@@ -1243,6 +1248,12 @@ namespace QgsWms
 
               QDomElement dimElem = doc.createElement( QStringLiteral( "Dimension" ) );
               dimElem.setAttribute( QStringLiteral( "name" ), dim.name );
+
+              if ( dim.name.toUpper() == QLatin1String( "TIME" ) )
+              {
+                timeDimensionAdded = true;
+              }
+
               if ( !dim.units.isEmpty() )
               {
                 dimElem.setAttribute( QStringLiteral( "units" ), dim.units );
@@ -1265,6 +1276,11 @@ namespace QgsWms
               }
               dimElem.setAttribute( QStringLiteral( "multipleValues" ), QStringLiteral( "1" ) );
               dimElem.setAttribute( QStringLiteral( "nearestValue" ), QStringLiteral( "0" ) );
+              if ( projectSettings )
+              {
+                dimElem.setAttribute( QStringLiteral( "fieldName" ), dim.fieldName );
+                dimElem.setAttribute( QStringLiteral( "endFieldName" ), dim.endFieldName );
+              }
               // values list
               QStringList strValues;
               for ( const QVariant &v : values )
@@ -1275,6 +1291,87 @@ namespace QgsWms
               dimElem.appendChild( dimValuesText );
               layerElem.appendChild( dimElem );
             }
+          }
+
+          // Add WMS time dimension if not already added
+          if ( ! timeDimensionAdded
+               && l->temporalProperties()
+               && l->temporalProperties()->isActive() )
+          {
+
+            QDomElement dimElem = doc.createElement( QStringLiteral( "Dimension" ) );
+            dimElem.setAttribute( QStringLiteral( "name" ), QStringLiteral( "TIME" ) );
+            dimElem.setAttribute( QStringLiteral( "units" ), QStringLiteral( "ISO8601" ) );
+
+            // TODO: set "default" (reference value)
+
+            // Add all values
+            const QList<QgsDateTimeRange> allRanges { l->temporalProperties()->allTemporalRanges( l ) };
+
+            // Apparently, for vectors allTemporalRanges is always empty :/
+            // there is no way to know the type of range or the individual instants
+
+            bool isDateList { true };
+            bool isInstantList { true };
+
+            QList<QDateTime> values;
+            for ( const auto &r : std::as_const( allRanges ) )
+            {
+              if ( r.isInstant() )
+              {
+                if ( r.begin().time() != QTime( 0, 0, 0, 0 ) )
+                {
+                  isDateList = false;
+                }
+                values.append( r.begin() );
+              }
+              else
+              {
+                isInstantList = false;
+                break;
+              }
+            }
+
+            // Only list individual values for list of instants,
+            // otherwise only the extent will be shown
+            if ( isInstantList )
+            {
+              // values list
+              QStringList strValues;
+              for ( const auto &v : values )
+              {
+                if ( isDateList )
+                {
+                  strValues << v.date().toString( Qt::DateFormat::ISODate );
+                }
+                else
+                {
+                  strValues << v.toString( Qt::DateFormat::ISODate );
+                }
+              }
+              QDomText dimValuesText = doc.createTextNode( strValues.join( QChar( ',' ) ) );
+              dimElem.appendChild( dimValuesText );
+            }
+
+            layerElem.appendChild( dimElem );
+
+            QDomElement timeExtentElem = doc.createElement( QStringLiteral( "Extent" ) );
+            timeExtentElem.setAttribute( QStringLiteral( "name" ), QStringLiteral( "TIME" ) );
+
+            const QgsDateTimeRange timeExtent { l->temporalProperties()->calculateTemporalExtent( l ) };
+            QString extent;
+            if ( isDateList )
+            {
+              extent = QStringLiteral( "%1/%2" ).arg( timeExtent.begin().date().toString( Qt::DateFormat::ISODate ), timeExtent.end().date().toString( Qt::DateFormat::ISODate ) );
+            }
+            else
+            {
+              extent = QStringLiteral( "%1/%2" ).arg( timeExtent.begin().toString( Qt::DateFormat::ISODate ), timeExtent.end().toString( Qt::DateFormat::ISODate ) );
+            }
+            QDomText extentValueText = doc.createTextNode( extent );
+            timeExtentElem.appendChild( extentValueText );
+            layerElem.appendChild( timeExtentElem );
+
           }
 
           if ( projectSettings )
@@ -1375,6 +1472,8 @@ namespace QgsWms
         return;
       }
 
+      const QString version = doc.documentElement().attribute( QStringLiteral( "version" ) );
+
       //insert the CRS elements after the title element to be in accordance with the WMS 1.3 specification
       QDomElement titleElement = layerElement.firstChildElement( QStringLiteral( "Title" ) );
       QDomElement abstractElement = layerElement.firstChildElement( QStringLiteral( "Abstract" ) );
@@ -1404,8 +1503,12 @@ namespace QgsWms
         }
       }
 
-      //Support for CRS:84 is mandatory (equals EPSG:4326 with reversed axis)
-      appendCrsElementToLayer( doc, layerElement, CRSPrecedingElement, QString( "CRS:84" ) );
+      // Support for CRS:84 is mandatory (equals EPSG:4326 with reversed axis)
+      // https://github.com/opengeospatial/ets-wms13/blob/47155399c09b200cb21382874fdb21d5fae4ab6e/src/site/markdown/index.md
+      if ( version == QLatin1String( "1.3.0" ) )
+      {
+        appendCrsElementToLayer( doc, layerElement, CRSPrecedingElement, QString( "CRS:84" ) );
+      }
     }
 
     void appendCrsElementToLayer( QDomDocument &doc, QDomElement &layerElement, const QDomElement &precedingElement,
@@ -1413,7 +1516,7 @@ namespace QgsWms
     {
       if ( crsText.isEmpty() )
         return;
-      QString version = doc.documentElement().attribute( QStringLiteral( "version" ) );
+      const QString version = doc.documentElement().attribute( QStringLiteral( "version" ) );
       QDomElement crsElement = doc.createElement( version == QLatin1String( "1.1.1" ) ? "SRS" : "CRS" );
       QDomText crsTextNode = doc.createTextNode( crsText );
       crsElement.appendChild( crsTextNode );
@@ -1542,7 +1645,7 @@ namespace QgsWms
         return;
       }
 
-      QString version = doc.documentElement().attribute( QStringLiteral( "version" ) );
+      const QString version = doc.documentElement().attribute( QStringLiteral( "version" ) );
 
       QgsCoordinateReferenceSystem crs = QgsCoordinateReferenceSystem::fromOgcWmsCrs( crsText );
 
@@ -1649,7 +1752,7 @@ namespace QgsWms
       }
 
 
-      QString version = doc.documentElement().attribute( QStringLiteral( "version" ) );
+      const QString version = doc.documentElement().attribute( QStringLiteral( "version" ) );
 
       //create layer crs
       QgsCoordinateReferenceSystem layerCrs = QgsCoordinateReferenceSystem::fromOgcWmsCrs( boundingBoxElem.attribute( version == QLatin1String( "1.1.1" ) ? "SRS" : "CRS" ) );
@@ -1974,6 +2077,7 @@ namespace QgsWms
         case QgsMapLayerType::PluginLayer:
         case QgsMapLayerType::AnnotationLayer:
         case QgsMapLayerType::PointCloudLayer:
+        case QgsMapLayerType::GroupLayer:
           break;
       }
     }

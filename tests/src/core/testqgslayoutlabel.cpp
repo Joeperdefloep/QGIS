@@ -16,10 +16,8 @@
  ***************************************************************************/
 
 #include "qgsapplication.h"
-#include "qgslayout.h"
 #include "qgslayoutitemlabel.h"
 #include "qgsvectorlayer.h"
-#include "qgsvectordataprovider.h"
 #include "qgsmultirenderchecker.h"
 #include "qgsfontutils.h"
 #include "qgsproject.h"
@@ -30,18 +28,16 @@
 #include <QObject>
 #include "qgstest.h"
 
-class TestQgsLayoutLabel : public QObject
+class TestQgsLayoutLabel : public QgsTest
 {
     Q_OBJECT
 
   public:
-    TestQgsLayoutLabel() = default;
+    TestQgsLayoutLabel() : QgsTest( QStringLiteral( "Layout Label Tests" ) ) {}
 
   private slots:
     void initTestCase();// will be called before the first testfunction is executed.
     void cleanupTestCase();// will be called after the last testfunction was executed.
-    void init();// will be called before each testfunction is executed.
-    void cleanup();// will be called after every testfunction.
 
     // test simple expression evaluation
     void evaluation();
@@ -53,13 +49,14 @@ class TestQgsLayoutLabel : public QObject
     void pageSizeEvaluation();
     void marginMethods(); //tests getting/setting margins
     void render();
+#ifdef WITH_QTWEBKIT
     void renderAsHtml();
     void renderAsHtmlRelative();
+#endif
     void labelRotation();
 
   private:
     QgsVectorLayer *mVectorLayer = nullptr;
-    QString mReport;
 };
 
 void TestQgsLayoutLabel::initTestCase()
@@ -77,26 +74,9 @@ void TestQgsLayoutLabel::initTestCase()
 
 void TestQgsLayoutLabel::cleanupTestCase()
 {
-  const QString myReportFile = QDir::tempPath() + "/qgistest.html";
-  QFile myFile( myReportFile );
-  if ( myFile.open( QIODevice::WriteOnly | QIODevice::Append ) )
-  {
-    QTextStream myQTextStream( &myFile );
-    myQTextStream << mReport;
-    myFile.close();
-  }
-
   delete mVectorLayer;
 
   QgsApplication::exitQgis();
-}
-
-void TestQgsLayoutLabel::init()
-{
-}
-
-void TestQgsLayoutLabel::cleanup()
-{
 }
 
 void TestQgsLayoutLabel::evaluation()
@@ -109,9 +89,6 @@ void TestQgsLayoutLabel::evaluation()
   QgsLayoutItemLabel *label = new QgsLayoutItemLabel( &l );
   label->setMargin( 1 );
   l.addLayoutItem( label );
-
-  qWarning() << "composer label font: " << label->font().toString() << " exactMatch:" << label->font().exactMatch();
-
 
   {
     // $CURRENT_DATE evaluation
@@ -293,7 +270,11 @@ void TestQgsLayoutLabel::render()
   l.addLayoutItem( label );
 
   label->setText( QStringLiteral( "test label" ) );
-  label->setFont( QgsFontUtils::getStandardTestFont( QStringLiteral( "Bold" ), 48 ) );
+  QgsTextFormat format;
+  format.setFont( QgsFontUtils::getStandardTestFont( QStringLiteral( "Bold" ) ) );
+  format.setSize( 48 );
+  format.setSizeUnit( QgsUnitTypes::RenderPoints );
+  label->setTextFormat( format );
   label->attemptMove( QgsLayoutPoint( 70, 70 ) );
   label->adjustSizeToText();
 
@@ -302,6 +283,7 @@ void TestQgsLayoutLabel::render()
   QVERIFY( checker.testLayout( mReport, 0, 0 ) );
 }
 
+#ifdef WITH_QTWEBKIT
 void TestQgsLayoutLabel::renderAsHtml()
 {
   QgsLayout l( QgsProject::instance() );
@@ -311,9 +293,15 @@ void TestQgsLayoutLabel::renderAsHtml()
   label->setMargin( 1 );
   l.addLayoutItem( label );
 
-  label->setFontColor( QColor( 200, 40, 60 ) );
   label->setText( QStringLiteral( "test <i>html</i>" ) );
-  label->setFont( QgsFontUtils::getStandardTestFont( QStringLiteral( "Bold" ), 48 ) );
+
+  QgsTextFormat format;
+  format.setFont( QgsFontUtils::getStandardTestFont( QStringLiteral( "Bold" ) ) );
+  format.setSize( 48 );
+  format.setSizeUnit( QgsUnitTypes::RenderPoints );
+  format.setColor( QColor( 200, 40, 60 ) );
+  label->setTextFormat( format );
+
   label->setPos( 70, 70 );
   label->adjustSizeToText();
   label->setMode( QgsLayoutItemLabel::ModeHtml );
@@ -334,9 +322,15 @@ void TestQgsLayoutLabel::renderAsHtmlRelative()
   l.addLayoutItem( label );
 
   QgsProject::instance()->setFileName( QStringLiteral( TEST_DATA_DIR ) +  QDir::separator() + "test.qgs" );
-  label->setFontColor( QColor( 200, 40, 60 ) );
   label->setText( QStringLiteral( "test <img src=\"small_sample_image.png\" />" ) );
-  label->setFont( QgsFontUtils::getStandardTestFont( QStringLiteral( "Bold" ), 48 ) );
+
+  QgsTextFormat format;
+  format.setFont( QgsFontUtils::getStandardTestFont( QStringLiteral( "Bold" ) ) );
+  format.setSize( 48 );
+  format.setSizeUnit( QgsUnitTypes::RenderPoints );
+  format.setColor( QColor( 200, 40, 60 ) );
+  label->setTextFormat( format );
+
   label->setPos( 70, 70 );
   label->adjustSizeToText();
   label->setMode( QgsLayoutItemLabel::ModeHtml );
@@ -346,6 +340,7 @@ void TestQgsLayoutLabel::renderAsHtmlRelative()
   checker.setControlPathPrefix( QStringLiteral( "composer_label" ) );
   QVERIFY( checker.testLayout( mReport, 0, 0 ) );
 }
+#endif
 
 void TestQgsLayoutLabel::labelRotation()
 {
@@ -355,7 +350,13 @@ void TestQgsLayoutLabel::labelRotation()
   label->setMargin( 1 );
   l.addLayoutItem( label );
   label->setText( QStringLiteral( "test label" ) );
-  label->setFont( QgsFontUtils::getStandardTestFont( QStringLiteral( "Bold" ), 30 ) );
+
+  QgsTextFormat format;
+  format.setFont( QgsFontUtils::getStandardTestFont( QStringLiteral( "Bold" ) ) );
+  format.setSize( 30 );
+  format.setSizeUnit( QgsUnitTypes::RenderPoints );
+  label->setTextFormat( format );
+
   label->attemptMove( QgsLayoutPoint( 70, 70 ) );
   label->adjustSizeToText();
   label->setBackgroundColor( QColor::fromRgb( 255, 150, 0 ) );

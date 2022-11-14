@@ -260,13 +260,6 @@ class CORE_EXPORT QgsCurve: public QgsAbstractGeometry SIP_ABSTRACT
      */
     double sinuosity() const;
 
-    //! Curve orientation
-    enum Orientation
-    {
-      Clockwise, //!< Clockwise orientation
-      CounterClockwise, //!< Counter-clockwise orientation
-    };
-
     /**
      * Returns the curve's orientation, e.g. clockwise or counter-clockwise.
      *
@@ -274,7 +267,7 @@ class CORE_EXPORT QgsCurve: public QgsAbstractGeometry SIP_ABSTRACT
      *
      * \since QGIS 3.6
      */
-    Orientation orientation() const;
+    Qgis::AngularDirection orientation() const;
 
     /**
      * Scrolls the curve vertices so that they start with the vertex at the given index.
@@ -347,6 +340,9 @@ class CORE_EXPORT QgsCurve: public QgsAbstractGeometry SIP_ABSTRACT
      * Cached bounding box.
      */
     mutable QgsRectangle mBoundingBox;
+
+    mutable bool mHasCachedSummedUpArea = false;
+    mutable double mSummedUpArea = 0;
 
   private:
 

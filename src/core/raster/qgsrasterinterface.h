@@ -30,6 +30,7 @@
 #include "qgsrasterblock.h"
 #include "qgsrasterhistogram.h"
 #include "qgsrectangle.h"
+#include "qgsrendercontext.h"
 
 /**
  * \ingroup core
@@ -93,6 +94,22 @@ class CORE_EXPORT QgsRasterBlockFeedback : public QgsFeedback
      */
     QStringList errors() const { return mErrors; }
 
+    /**
+     * Returns the render context of the associated block reading
+     *
+     * \see setRenderContext()
+     * \since QGIS 3.24.0
+     */
+    QgsRenderContext renderContext() const;
+
+    /**
+     * Sets the render context of the associated block reading
+     *
+     * \see renderContext()
+     * \since QGIS 3.24.0
+     */
+    void setRenderContext( const QgsRenderContext &renderContext );
+
   private:
 
     /**
@@ -106,6 +123,8 @@ class CORE_EXPORT QgsRasterBlockFeedback : public QgsFeedback
 
     //! List of errors encountered while retrieving block
     QStringList mErrors;
+
+    QgsRenderContext mRenderContext;
 };
 
 
@@ -132,6 +151,7 @@ class CORE_EXPORT QgsRasterInterface
 #include <qgssinglebandcolordatarenderer.h>
 #include <qgssinglebandgrayrenderer.h>
 #include <qgssinglebandpseudocolorrenderer.h>
+#include <qgsrastercontourrenderer.h>
 #endif
 
 
@@ -166,6 +186,8 @@ class CORE_EXPORT QgsRasterInterface
         sipType = sipType_QgsSingleBandGrayRenderer;
       else if ( dynamic_cast<QgsSingleBandPseudoColorRenderer *>( sipCpp ) )
         sipType = sipType_QgsSingleBandPseudoColorRenderer;
+      else if ( dynamic_cast<QgsRasterContourRenderer *>( sipCpp ) )
+        sipType = sipType_QgsRasterContourRenderer;
       else
         sipType = sipType_QgsRasterRenderer;
     }
@@ -552,7 +574,7 @@ class CORE_EXPORT QgsRasterInterface
     void initStatistics( QgsRasterBandStats &statistics, int bandNo,
                          int stats = QgsRasterBandStats::All,
                          const QgsRectangle &boundingBox = QgsRectangle(),
-                         int binCount = 0 );
+                         int binCount = 0 ) const;
 
   private:
 #ifdef SIP_RUN
@@ -564,5 +586,3 @@ class CORE_EXPORT QgsRasterInterface
 };
 
 #endif
-
-

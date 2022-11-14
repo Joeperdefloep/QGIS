@@ -23,6 +23,8 @@
 #include "qgsmeshdatasetgrouptreeview.h"
 #include "qgsmeshrendereractivedatasetwidget.h"
 #include "qgsmeshlayerutils.h"
+#include "qgsproject.h"
+#include "qgsprojectutils.h"
 
 QgsRendererMeshPropertiesWidget::QgsRendererMeshPropertiesWidget( QgsMeshLayer *layer, QgsMapCanvas *canvas, QWidget *parent )
   : QgsMapLayerConfigWidget( layer, canvas, parent )
@@ -48,8 +50,12 @@ QgsRendererMeshPropertiesWidget::QgsRendererMeshPropertiesWidget( QgsMeshLayer *
   syncToLayer( mMeshLayer );
 
   //blend mode
+  mBlendModeComboBox->setShowClippingModes( QgsProjectUtils::layerIsContainedInGroupLayer( QgsProject::instance(), mMeshLayer ) );
   mBlendModeComboBox->setBlendMode( mMeshLayer->blendMode() );
   connect( mBlendModeComboBox, static_cast<void ( QComboBox::* )( int )>( &QComboBox::currentIndexChanged ), this, &QgsPanelWidget::widgetChanged );
+
+  mOpacityWidget->setOpacity( mMeshLayer->opacity() );
+  connect( mOpacityWidget, &QgsOpacityWidget::opacityChanged, this, &QgsPanelWidget::widgetChanged );
 
   connect( mMeshRendererActiveDatasetWidget, &QgsMeshRendererActiveDatasetWidget::activeScalarGroupChanged,
            this, &QgsRendererMeshPropertiesWidget::onActiveScalarGroupChanged );
@@ -121,8 +127,9 @@ void QgsRendererMeshPropertiesWidget::apply()
   mMeshLayer->setStaticScalarDatasetIndex( staticScalarDatasetIndex );
   mMeshLayer->setStaticVectorDatasetIndex( staticVectorDatasetIndex );
 
-  //set the blend mode for the layer
+  //set the blend mode and opacity for the layer
   mMeshLayer->setBlendMode( mBlendModeComboBox->blendMode() );
+  mLayer->setOpacity( mOpacityWidget->opacity() );
   //set the averaging method for the layer
   const std::unique_ptr<QgsMesh3dAveragingMethod> averagingMethod( m3dAveragingSettingsWidget->averagingMethod() );
   settings.setAveragingMethod( averagingMethod.get() );
@@ -167,10 +174,10 @@ void QgsRendererMeshPropertiesWidget::syncToLayerPrivate()
   onActiveVectorGroupChanged( mMeshLayer->rendererSettings().activeVectorDatasetGroup() );
 
   const bool hasFaces = ( mMeshLayer->contains( QgsMesh::ElementType::Face ) );
-  mFaceMeshGroupBox->setVisible( hasFaces );
+  mFaceMeshGroupBox->setVisible( hasFaces || !mMeshLayer->isValid() );
 
   const bool hasEdges = ( mMeshLayer->contains( QgsMesh::ElementType::Edge ) );
-  mEdgeMeshGroupBox->setVisible( hasEdges );
+  mEdgeMeshGroupBox->setVisible( hasEdges || !mMeshLayer->isValid() );
 
   QgsSettings settings;
   if ( !settings.contains( QStringLiteral( "/Windows/RendererMeshProperties/tab" ) ) )

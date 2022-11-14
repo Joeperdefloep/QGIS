@@ -223,16 +223,28 @@ void QgsVectorTileBasicLabelProvider::registerTileFeatures( const QgsVectorTileR
     if ( layerStyle.layerName().isEmpty() )
     {
       // matching all layers
-      for ( QString layerName : tileData.keys() )
+      for ( const auto &features : tileData )
       {
-        for ( const QgsFeature &f : tileData[layerName] )
+        for ( const QgsFeature &f : features )
         {
           scope->setFeature( f );
           if ( filterExpression.isValid() && !filterExpression.evaluate( &context.expressionContext() ).toBool() )
             continue;
 
-          if ( QgsWkbTypes::geometryType( f.geometry().wkbType() ) == layerStyle.geometryType() )
+          const QgsWkbTypes::GeometryType featureType = QgsWkbTypes::geometryType( f.geometry().wkbType() );
+          if ( featureType == layerStyle.geometryType() )
+          {
             subProvider->registerFeature( f, context );
+          }
+          else if ( featureType == QgsWkbTypes::PolygonGeometry && layerStyle.geometryType() == QgsWkbTypes::PointGeometry )
+          {
+            // be tolerant and permit labeling polygons with a point layer style, as some style definitions use this approach
+            // to label the polygon center
+            QgsFeature centroid = f;
+            const QgsRectangle boundingBox = f.geometry().boundingBox();
+            centroid.setGeometry( f.geometry().poleOfInaccessibility( std::min( boundingBox.width(), boundingBox.height() ) / 20 ) );
+            subProvider->registerFeature( centroid, context );
+          }
         }
       }
     }
@@ -245,8 +257,20 @@ void QgsVectorTileBasicLabelProvider::registerTileFeatures( const QgsVectorTileR
         if ( filterExpression.isValid() && !filterExpression.evaluate( &context.expressionContext() ).toBool() )
           continue;
 
-        if ( QgsWkbTypes::geometryType( f.geometry().wkbType() ) == layerStyle.geometryType() )
+        const QgsWkbTypes::GeometryType featureType = QgsWkbTypes::geometryType( f.geometry().wkbType() );
+        if ( featureType == layerStyle.geometryType() )
+        {
           subProvider->registerFeature( f, context );
+        }
+        else if ( featureType == QgsWkbTypes::PolygonGeometry && layerStyle.geometryType() == QgsWkbTypes::PointGeometry )
+        {
+          // be tolerant and permit labeling polygons with a point layer style, as some style definitions use this approach
+          // to label the polygon center
+          QgsFeature centroid = f;
+          const QgsRectangle boundingBox = f.geometry().boundingBox();
+          centroid.setGeometry( f.geometry().poleOfInaccessibility( std::min( boundingBox.width(), boundingBox.height() ) / 20 ) );
+          subProvider->registerFeature( centroid, context );
+        }
       }
     }
   }

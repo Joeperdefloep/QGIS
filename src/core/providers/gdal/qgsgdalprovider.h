@@ -125,6 +125,12 @@ class QgsGdalProvider final: public QgsRasterDataProvider, QgsGdalProviderBase
      */
     static QString helpCreationOptionsFormat( QString format );
 
+    /**
+     * Replaces the authcfg part of the string with authentication information
+     * \since QGIS 3.22
+     */
+    static QString expandAuthConfig( const QString &dsName );
+
     QString description() const override;
     QgsRasterDataProvider::ProviderCapabilities providerCapabilities() const override;
     QgsCoordinateReferenceSystem crs() const override;
@@ -222,6 +228,11 @@ class QgsGdalProvider final: public QgsRasterDataProvider, QgsGdalProviderBase
     //! Open mGdalDataset/mGdalBaseDataset if needed.
     bool initIfNeeded();
 
+    //! Load attribute tables
+    bool readNativeAttributeTable( QString *errorMessage = nullptr ) override;
+
+    bool writeNativeAttributeTable( QString *errorMessage = nullptr ) override;  //#spellok
+
     // There are 2 cloning mechanisms.
     // * Either the cloned provider use the same GDAL handles as the main provider
     //   instance, in which case *mpRefCounter is used to count how many providers
@@ -236,12 +247,7 @@ class QgsGdalProvider final: public QgsRasterDataProvider, QgsGdalProviderBase
     QAtomicInt *mpRefCounter = nullptr;
 
     // mutex to protect access to mGdalDataset among main and shared provider instances
-#if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
-    QMutex *mpMutex = nullptr;
-#else
     QRecursiveMutex *mpMutex = nullptr;
-#endif
-
 
     // pointer to a QgsGdalProvider* that is the parent. Note when *mpParent == this, we are the parent.
     QgsGdalProvider **mpParent = nullptr;
@@ -364,8 +370,10 @@ class QgsGdalProvider final: public QgsRasterDataProvider, QgsGdalProviderBase
  */
 class QgsGdalProviderMetadata final: public QgsProviderMetadata
 {
+    Q_OBJECT
   public:
     QgsGdalProviderMetadata();
+    QIcon icon() const override;
     QVariantMap decodeUri( const QString &uri ) const override;
     QString encodeUri( const QVariantMap &parts ) const override;
     bool uriIsBlocklisted( const QString &uri ) const override;
@@ -386,6 +394,7 @@ class QgsGdalProviderMetadata final: public QgsProviderMetadata
     ProviderCapabilities providerCapabilities() const override;
     QList< QgsProviderSublayerDetails > querySublayers( const QString &uri, Qgis::SublayerQueryFlags flags = Qgis::SublayerQueryFlags(), QgsFeedback *feedback = nullptr ) const override;
     QStringList sidecarFilesForUri( const QString &uri ) const override;
+    QList< QgsMapLayerType > supportedLayerTypes() const override;
 };
 
 ///@endcond

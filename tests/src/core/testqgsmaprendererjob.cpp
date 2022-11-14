@@ -1,5 +1,5 @@
 /***************************************************************************
-     testqgsvectorfilewriter.cpp
+     testqgsmaprendererjob.cpp
      --------------------------------------
     Date                 : Sun Sep 16 12:22:54 AKDT 2007
     Copyright            : (C) 2007 by Tim Sutton
@@ -12,6 +12,7 @@
  *   (at your option) any later version.                                   *
  *                                                                         *
  ***************************************************************************/
+
 #include "qgstest.h"
 #include <QObject>
 #include <QString>
@@ -31,6 +32,8 @@
 #include "qgsfield.h"
 #include "qgis.h"
 #include "qgsmaprenderersequentialjob.h"
+#include "qgsmaprenderercustompainterjob.h"
+#include "qgsnullpainterdevice.h"
 #include "qgsmaplayer.h"
 #include "qgsreadwritecontext.h"
 #include "qgsproviderregistry.h"
@@ -45,6 +48,7 @@
 #include "qgssinglesymbolrenderer.h"
 #include "qgsrasterlayertemporalproperties.h"
 #include "qgslinesymbol.h"
+#include "qgslabelsink.h"
 
 //qgs unit test utility class
 #include "qgsmultirenderchecker.h"
@@ -55,12 +59,12 @@
  * It will do some performance testing too
  *
  */
-class TestQgsMapRendererJob : public QObject
+class TestQgsMapRendererJob : public QgsTest
 {
     Q_OBJECT
 
   public:
-    TestQgsMapRendererJob() = default;
+    TestQgsMapRendererJob() : QgsTest( QStringLiteral( "Map Renderer Job Tests" ) ) {}
 
     ~TestQgsMapRendererJob() override
     {
@@ -70,8 +74,6 @@ class TestQgsMapRendererJob : public QObject
   private slots:
     void initTestCase();// will be called before the first testfunction is executed.
     void cleanupTestCase();// will be called after the last testfunction was executed.
-    void init() {} // will be called before each testfunction is executed.
-    void cleanup() {} // will be called after every testfunction.
 
     //! This method tests render performance
     void performanceTest();
@@ -91,6 +93,11 @@ class TestQgsMapRendererJob : public QObject
 
     void temporalRender();
 
+    void labelSink();
+    void skipSymbolRendering();
+
+    void customNullPainterJob();
+
   private:
     bool imageCheck( const QString &type, const QImage &image, int mismatchCount = 0 );
 
@@ -100,7 +107,6 @@ class TestQgsMapRendererJob : public QObject
     QgsFields mFields;
     QgsMapSettings *mMapSettings = nullptr;
     QgsMapLayer *mpPolysLayer = nullptr;
-    QString mReport;
 };
 
 
@@ -199,22 +205,11 @@ void TestQgsMapRendererJob::initTestCase()
   QgsProject::instance()->addMapLayers( QList<QgsMapLayer *>() << mpPolysLayer );
   // add the test layer to the maprender
   mMapSettings->setLayers( QList<QgsMapLayer *>() << mpPolysLayer );
-  mReport += QLatin1String( "<h1>Map Render Tests</h1>\n" );
 }
 
 void TestQgsMapRendererJob::cleanupTestCase()
 {
   QgsApplication::exitQgis();
-
-  QString myReportFile = QDir::tempPath() + "/qgistest.html";
-  QFile myFile( myReportFile );
-  if ( myFile.open( QIODevice::WriteOnly | QIODevice::Append ) )
-  {
-    QTextStream myQTextStream( &myFile );
-    myQTextStream << mReport;
-    myFile.close();
-    //QDesktopServices::openUrl( "file:///" + myReportFile );
-  }
 }
 
 void TestQgsMapRendererJob::performanceTest()
@@ -487,7 +482,6 @@ void TestQgsMapRendererJob::testRenderedFeatureHandlers()
   QCOMPARE( attributes.at( 2 ), QStringLiteral( "Highway,1" ) );
   QCOMPARE( attributes.at( 3 ), QStringLiteral( "Highway,1" ) );
   QCOMPARE( attributes.at( 4 ), QStringLiteral( "Jet,95,3,1,1,2" ) );
-
 }
 
 void TestQgsMapRendererJob::stagedRenderer()
@@ -764,13 +758,13 @@ void TestQgsMapRendererJob::stagedRendererWithStagedLabeling()
   pointsLayer->setLabelsEnabled( true );
 
   settings.fieldName = QStringLiteral( "Name" );
-  settings.placement = QgsPalLayerSettings::Line;
+  settings.placement = Qgis::LabelPlacement::Line;
   settings.zIndex = 3;
   linesLayer->setLabeling( new QgsVectorLayerSimpleLabeling( settings ) );
   linesLayer->setLabelsEnabled( true );
 
   settings.fieldName = QStringLiteral( "Name" );
-  settings.placement = QgsPalLayerSettings::OverPoint;
+  settings.placement = Qgis::LabelPlacement::OverPoint;
   settings.zIndex = 2;
   settings.obstacleSettings().setType( QgsLabelObstacleSettings::PolygonInterior );
   polygonsLayer->setLabeling( new QgsVectorLayerSimpleLabeling( settings ) );
@@ -947,9 +941,142 @@ void TestQgsMapRendererJob::temporalRender()
 
 }
 
+class TestLabelSink : public QgsLabelSink
+{
+  public:
+    TestLabelSink() {};
+
+    void drawLabel( const QString &layerId, QgsRenderContext &context, pal::LabelPosition *label, const QgsPalLayerSettings &settings ) override
+    {
+      Q_UNUSED( layerId )
+      Q_UNUSED( context )
+      Q_UNUSED( label )
+      Q_UNUSED( settings )
+      drawnCount++;
+    };
+
+    int drawnCount = 0;
+};
+
+void TestQgsMapRendererJob::labelSink()
+{
+  std::unique_ptr< QgsVectorLayer > pointsLayer = std::make_unique< QgsVectorLayer >( TEST_DATA_DIR + QStringLiteral( "/points.shp" ),
+      QStringLiteral( "points" ), QStringLiteral( "ogr" ) );
+  QVERIFY( pointsLayer->isValid() );
+
+  QgsPalLayerSettings settings;
+  settings.fieldName = QStringLiteral( "Class" );
+  QgsTextFormat format;
+  format.setFont( QgsFontUtils::getStandardTestFont( QStringLiteral( "Bold" ) ).family() );
+  format.setSize( 12 );
+  format.setNamedStyle( QStringLiteral( "Bold" ) );
+  format.setColor( QColor( 200, 0, 200 ) );
+  settings.setFormat( format );
+  settings.zIndex = 1;
+
+  pointsLayer->setLabeling( new QgsVectorLayerSimpleLabeling( settings ) );
+  pointsLayer->setLabelsEnabled( true );
+
+  QgsMapSettings mapSettings;
+  mapSettings.setDestinationCrs( pointsLayer->crs() );
+  mapSettings.setExtent( pointsLayer->extent() );
+  mapSettings.setOutputSize( QSize( 512, 512 ) );
+  mapSettings.setFlag( Qgis::MapSettingsFlag::DrawLabeling, true );
+  mapSettings.setOutputDpi( 96 );
+  mapSettings.setLayers( QList< QgsMapLayer * >() << pointsLayer.get() );
+
+
+  QgsMapRendererSequentialJob renderJob( mapSettings );
+
+  std::unique_ptr<TestLabelSink> labelSink = std::make_unique<TestLabelSink>();
+  renderJob.setLabelSink( labelSink.get() );
+  renderJob.start();
+  renderJob.waitForFinished();
+  QImage img = renderJob.renderedImage();
+  QVERIFY( imageCheck( QStringLiteral( "label_sink" ), img ) );
+  QCOMPARE( labelSink->drawnCount, 17 );
+}
+
+void TestQgsMapRendererJob::skipSymbolRendering()
+{
+  std::unique_ptr< QgsVectorLayer > pointsLayer = std::make_unique< QgsVectorLayer >( TEST_DATA_DIR + QStringLiteral( "/points.shp" ),
+      QStringLiteral( "points" ), QStringLiteral( "ogr" ) );
+  QVERIFY( pointsLayer->isValid() );
+
+  QgsPalLayerSettings settings;
+  settings.fieldName = QStringLiteral( "Class" );
+  QgsTextFormat format;
+  format.setFont( QgsFontUtils::getStandardTestFont( QStringLiteral( "Bold" ) ).family() );
+  format.setSize( 12 );
+  format.setNamedStyle( QStringLiteral( "Bold" ) );
+  format.setColor( QColor( 200, 0, 200 ) );
+  settings.setFormat( format );
+  settings.zIndex = 1;
+
+  pointsLayer->setLabeling( new QgsVectorLayerSimpleLabeling( settings ) );
+  pointsLayer->setLabelsEnabled( true );
+
+  QgsMapSettings mapSettings;
+  mapSettings.setDestinationCrs( pointsLayer->crs() );
+  mapSettings.setExtent( pointsLayer->extent() );
+  mapSettings.setOutputSize( QSize( 512, 512 ) );
+  mapSettings.setFlag( Qgis::MapSettingsFlag::DrawLabeling, true );
+  mapSettings.setFlag( Qgis::MapSettingsFlag::SkipSymbolRendering, true );
+  mapSettings.setOutputDpi( 96 );
+  mapSettings.setLayers( QList< QgsMapLayer * >() << pointsLayer.get() );
+
+  QgsMapRendererSequentialJob renderJob( mapSettings );
+  renderJob.start();
+  renderJob.waitForFinished();
+  QImage img = renderJob.renderedImage();
+  QVERIFY( imageCheck( QStringLiteral( "skip_symbol_rendering" ), img ) );
+}
+
+void TestQgsMapRendererJob::customNullPainterJob()
+{
+  std::unique_ptr< QgsVectorLayer > pointsLayer = std::make_unique< QgsVectorLayer >( TEST_DATA_DIR + QStringLiteral( "/points.shp" ),
+      QStringLiteral( "points" ), QStringLiteral( "ogr" ) );
+  QVERIFY( pointsLayer->isValid() );
+
+  QgsPalLayerSettings settings;
+  settings.fieldName = QStringLiteral( "Class" );
+  QgsTextFormat format;
+  format.setFont( QgsFontUtils::getStandardTestFont( QStringLiteral( "Bold" ) ).family() );
+  format.setSize( 12 );
+  format.setNamedStyle( QStringLiteral( "Bold" ) );
+  format.setColor( QColor( 200, 0, 200 ) );
+  settings.setFormat( format );
+  settings.zIndex = 1;
+
+  pointsLayer->setLabeling( new QgsVectorLayerSimpleLabeling( settings ) );
+  pointsLayer->setLabelsEnabled( true );
+
+  QgsMapSettings mapSettings;
+  mapSettings.setDestinationCrs( pointsLayer->crs() );
+  mapSettings.setExtent( pointsLayer->extent() );
+  mapSettings.setOutputSize( QSize( 512, 512 ) );
+  mapSettings.setFlag( Qgis::MapSettingsFlag::DrawLabeling, true );
+  mapSettings.setOutputDpi( 96 );
+  mapSettings.setLayers( QList< QgsMapLayer * >() << pointsLayer.get() );
+
+  std::unique_ptr<QgsNullPaintDevice> nullPaintDevice = std::make_unique<QgsNullPaintDevice>();
+  nullPaintDevice->setOutputSize( QSize( 512, 512 ) );
+  nullPaintDevice->setOutputDpi( 96 );
+  std::unique_ptr<QPainter> painter = std::make_unique<QPainter>( nullPaintDevice.get() );
+
+  QgsMapRendererCustomPainterJob renderJob( mapSettings, painter.get() );
+
+  std::unique_ptr<TestLabelSink> labelSink = std::make_unique<TestLabelSink>();
+  renderJob.setLabelSink( labelSink.get() );
+
+  renderJob.start();
+  renderJob.waitForFinished();
+
+  QCOMPARE( labelSink->drawnCount, 17 );
+}
+
 bool TestQgsMapRendererJob::imageCheck( const QString &testName, const QImage &image, int mismatchCount )
 {
-  mReport += "<h2>" + testName + "</h2>\n";
   QString myTmpDir = QDir::tempPath() + '/';
   QString myFileName = myTmpDir + testName + ".png";
   image.save( myFileName, "PNG" );

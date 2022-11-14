@@ -18,7 +18,7 @@
 #include "qgscoordinatereferencesystem.h"
 #include "qgscoordinatereferencesystem_p.h"
 
-#include "qgscoordinatereferencesystem_legacy.h"
+#include "qgscoordinatereferencesystem_legacy_p.h"
 #include "qgscoordinatereferencesystemregistry.h"
 #include "qgsreadwritelocker.h"
 
@@ -40,6 +40,7 @@
 #include "qgssettings.h"
 #include "qgsogrutils.h"
 #include "qgsdatums.h"
+#include "qgsogcutils.h"
 #include "qgsprojectionfactors.h"
 #include "qgsprojoperation.h"
 
@@ -124,6 +125,7 @@ QgsCoordinateReferenceSystem::QgsCoordinateReferenceSystem( const long id, CrsTy
 QgsCoordinateReferenceSystem::QgsCoordinateReferenceSystem( const QgsCoordinateReferenceSystem &srs )  //NOLINT
   : d( srs.d )
   , mValidationHint( srs.mValidationHint )
+  , mNativeFormat( srs.mNativeFormat )
 {
 }
 
@@ -131,6 +133,7 @@ QgsCoordinateReferenceSystem &QgsCoordinateReferenceSystem::operator=( const Qgs
 {
   d = srs.d;
   mValidationHint = srs.mValidationHint;
+  mNativeFormat = srs.mNativeFormat;
   return *this;
 }
 
@@ -283,7 +286,7 @@ bool QgsCoordinateReferenceSystem::createFromString( const QString &definition )
   locker.unlock();
 
   bool result = false;
-  const thread_local QRegularExpression reCrsId( QStringLiteral( "^(epsg|esri|osgeo|ignf|zangi|iau2000|postgis|internal|user)\\:(\\w+)$" ), QRegularExpression::CaseInsensitiveOption );
+  const thread_local QRegularExpression reCrsId( QStringLiteral( "^(epsg|esri|osgeo|ignf|ogc|nkg|zangi|iau_2015|iau2000|postgis|internal|user)\\:(\\w+)$" ), QRegularExpression::CaseInsensitiveOption );
   QRegularExpressionMatch match = reCrsId.match( definition );
   if ( match.capturedStart() == 0 )
   {
@@ -299,7 +302,15 @@ bool QgsCoordinateReferenceSystem::createFromString( const QString &definition )
       result = createFromSrid( id );
       Q_NOWARN_DEPRECATED_POP
     }
-    else if ( authName == QLatin1String( "esri" ) || authName == QLatin1String( "osgeo" ) || authName == QLatin1String( "ignf" ) || authName == QLatin1String( "zangi" ) || authName == QLatin1String( "iau2000" ) )
+    else if ( authName == QLatin1String( "esri" )
+              || authName == QLatin1String( "osgeo" )
+              || authName == QLatin1String( "ignf" )
+              || authName == QLatin1String( "zangi" )
+              || authName == QLatin1String( "iau2000" )
+              || authName == QLatin1String( "ogc" )
+              || authName == QLatin1String( "nkg" )
+              || authName == QLatin1String( "iau_2015" )
+            )
     {
       result = createFromOgcWmsCrs( definition );
     }
@@ -392,32 +403,26 @@ bool QgsCoordinateReferenceSystem::createFromOgcWmsCrs( const QString &crs )
 
   QString wmsCrs = crs;
 
-  thread_local const QRegularExpression re_uri( QRegularExpression::anchoredPattern( QStringLiteral( "http://www\\.opengis\\.net/def/crs/([^/]+).+/([^/]+)" ) ), QRegularExpression::CaseInsensitiveOption );
-  QRegularExpressionMatch match = re_uri.match( wmsCrs );
-  if ( match.hasMatch() )
+  QString authority;
+  QString code;
+  const QgsOgcCrsUtils::CRSFlavor crsFlavor = QgsOgcCrsUtils::parseCrsName( crs, authority, code );
+  const QString authorityLower = authority.toLower();
+  if ( crsFlavor == QgsOgcCrsUtils::CRSFlavor::AUTH_CODE &&
+       ( authorityLower == QLatin1String( "user" ) ||
+         authorityLower == QLatin1String( "custom" ) ||
+         authorityLower == QLatin1String( "qgis" ) ) )
   {
-    wmsCrs = match.captured( 1 ) + ':' + match.captured( 2 );
+    if ( createFromSrsId( code.toInt() ) )
+    {
+      locker.changeMode( QgsReadWriteLocker::Write );
+      if ( !sDisableOgcCache )
+        sOgcCache()->insert( crs, *this );
+      return d->mIsValid;
+    }
   }
-  else
+  else if ( crsFlavor != QgsOgcCrsUtils::CRSFlavor::UNKNOWN )
   {
-    thread_local const QRegularExpression re_urn( QRegularExpression::anchoredPattern( QStringLiteral( "urn:ogc:def:crs:([^:]+).+(?<=:)([^:]+)" ) ), QRegularExpression::CaseInsensitiveOption );
-    match = re_urn.match( wmsCrs );
-    if ( match.hasMatch() )
-    {
-      wmsCrs = match.captured( 1 ) + ':' + match.captured( 2 );
-    }
-    else
-    {
-      thread_local const QRegularExpression re_urn_custom( QRegularExpression::anchoredPattern( QStringLiteral( "(user|custom|qgis):(\\d+)" ) ), QRegularExpression::CaseInsensitiveOption );
-      match = re_urn_custom.match( wmsCrs );
-      if ( match.hasMatch() && createFromSrsId( match.captured( 2 ).toInt() ) )
-      {
-        locker.changeMode( QgsReadWriteLocker::Write );
-        if ( !sDisableOgcCache )
-          sOgcCache()->insert( crs, *this );
-        return d->mIsValid;
-      }
-    }
+    wmsCrs = authority + ':' + code;
   }
 
   // first chance for proj 6 - scan through legacy systems and try to use authid directly
@@ -789,6 +794,101 @@ bool QgsCoordinateReferenceSystem::hasAxisInverted() const
   }
 
   return d->mAxisInverted;
+}
+
+QList<Qgis::CrsAxisDirection> QgsCoordinateReferenceSystem::axisOrdering() const
+{
+  const PJ *projObject = d->threadLocalProjObject();
+  if ( !projObject )
+    return {};
+
+  PJ_CONTEXT *context = QgsProjContext::get();
+  QgsProjUtils::proj_pj_unique_ptr pjCs( proj_crs_get_coordinate_system( context, projObject ) );
+  if ( !pjCs )
+    return {};
+
+  const thread_local QMap< Qgis::CrsAxisDirection, QString > mapping =
+  {
+    { Qgis::CrsAxisDirection::North, QStringLiteral( "north" ) },
+    { Qgis::CrsAxisDirection::NorthNorthEast, QStringLiteral( "northNorthEast" ) },
+    { Qgis::CrsAxisDirection::NorthEast, QStringLiteral( "northEast" ) },
+    { Qgis::CrsAxisDirection::EastNorthEast, QStringLiteral( "eastNorthEast" ) },
+    { Qgis::CrsAxisDirection::East, QStringLiteral( "east" ) },
+    { Qgis::CrsAxisDirection::EastSouthEast, QStringLiteral( "eastSouthEast" ) },
+    { Qgis::CrsAxisDirection::SouthEast, QStringLiteral( "southEast" ) },
+    { Qgis::CrsAxisDirection::SouthSouthEast, QStringLiteral( "southSouthEast" ) },
+    { Qgis::CrsAxisDirection::South, QStringLiteral( "south" ) },
+    { Qgis::CrsAxisDirection::SouthSouthWest, QStringLiteral( "southSouthWest" ) },
+    { Qgis::CrsAxisDirection::SouthWest, QStringLiteral( "southWest" ) },
+    { Qgis::CrsAxisDirection::WestSouthWest, QStringLiteral( "westSouthWest" ) },
+    { Qgis::CrsAxisDirection::West, QStringLiteral( "west" ) },
+    { Qgis::CrsAxisDirection::WestNorthWest, QStringLiteral( "westNorthWest" ) },
+    { Qgis::CrsAxisDirection::NorthWest, QStringLiteral( "northWest" ) },
+    { Qgis::CrsAxisDirection::NorthNorthWest, QStringLiteral( "northNorthWest" ) },
+    { Qgis::CrsAxisDirection::GeocentricX, QStringLiteral( "geocentricX" ) },
+    { Qgis::CrsAxisDirection::GeocentricY, QStringLiteral( "geocentricY" ) },
+    { Qgis::CrsAxisDirection::GeocentricZ, QStringLiteral( "geocentricZ" ) },
+    { Qgis::CrsAxisDirection::Up, QStringLiteral( "up" ) },
+    { Qgis::CrsAxisDirection::Down, QStringLiteral( "down" ) },
+    { Qgis::CrsAxisDirection::Forward, QStringLiteral( "forward" ) },
+    { Qgis::CrsAxisDirection::Aft, QStringLiteral( "aft" ) },
+    { Qgis::CrsAxisDirection::Port, QStringLiteral( "port" ) },
+    { Qgis::CrsAxisDirection::Starboard, QStringLiteral( "starboard" ) },
+    { Qgis::CrsAxisDirection::Clockwise, QStringLiteral( "clockwise" ) },
+    { Qgis::CrsAxisDirection::CounterClockwise, QStringLiteral( "counterClockwise" ) },
+    { Qgis::CrsAxisDirection::ColumnPositive, QStringLiteral( "columnPositive" ) },
+    { Qgis::CrsAxisDirection::ColumnNegative, QStringLiteral( "columnNegative" ) },
+    { Qgis::CrsAxisDirection::RowPositive, QStringLiteral( "rowPositive" ) },
+    { Qgis::CrsAxisDirection::RowNegative, QStringLiteral( "rowNegative" ) },
+    { Qgis::CrsAxisDirection::DisplayRight, QStringLiteral( "displayRight" ) },
+    { Qgis::CrsAxisDirection::DisplayLeft, QStringLiteral( "displayLeft" ) },
+    { Qgis::CrsAxisDirection::DisplayUp, QStringLiteral( "displayUp" ) },
+    { Qgis::CrsAxisDirection::DisplayDown, QStringLiteral( "displayDown" ) },
+    { Qgis::CrsAxisDirection::Future, QStringLiteral( "future" ) },
+    { Qgis::CrsAxisDirection::Past, QStringLiteral( "past" ) },
+    { Qgis::CrsAxisDirection::Towards, QStringLiteral( "towards" ) },
+    { Qgis::CrsAxisDirection::AwayFrom, QStringLiteral( "awayFrom" ) },
+  };
+
+  QList< Qgis::CrsAxisDirection > res;
+  const int axisCount = proj_cs_get_axis_count( context, pjCs.get() );
+  if ( axisCount > 0 )
+  {
+    res.reserve( axisCount );
+
+    for ( int i = 0; i < axisCount; ++i )
+    {
+      const char *outDirection = nullptr;
+      proj_cs_get_axis_info( context, pjCs.get(), i,
+                             nullptr,
+                             nullptr,
+                             &outDirection,
+                             nullptr,
+                             nullptr,
+                             nullptr,
+                             nullptr
+                           );
+      // get first word of direction only
+      const thread_local QRegularExpression rx( QStringLiteral( "([^\\s]+).*" ) );
+      const QRegularExpressionMatch match = rx.match( QString( outDirection ) );
+      if ( !match.hasMatch() )
+        continue;
+
+      const QString direction = match.captured( 1 );
+      Qgis::CrsAxisDirection dir = Qgis::CrsAxisDirection::Unspecified;
+      for ( auto it = mapping.constBegin(); it != mapping.constEnd(); ++it )
+      {
+        if ( it.value().compare( direction, Qt::CaseInsensitive ) == 0 )
+        {
+          dir = it.key();
+          break;
+        }
+      }
+
+      res.append( dir );
+    }
+  }
+  return res;
 }
 
 bool QgsCoordinateReferenceSystem::createFromWkt( const QString &wkt )
@@ -1226,7 +1326,7 @@ QString QgsCoordinateReferenceSystem::celestialBodyName() const
 
   return QString( proj_get_celestial_body_name( context, pj ) );
 #else
-  throw QgsNotSupportedException( QStringLiteral( "Retrieving celestial body requires a QGIS build based on PROJ 8.1 or later" ) );
+  throw QgsNotSupportedException( QObject::tr( "Retrieving celestial body requires a QGIS build based on PROJ 8.1 or later" ) );
 #endif
 }
 
@@ -1289,7 +1389,7 @@ QgsDatumEnsemble QgsCoordinateReferenceSystem::datumEnsemble() const
   }
   return res;
 #else
-  throw QgsNotSupportedException( QStringLiteral( "Calculating datum ensembles requires a QGIS build based on PROJ 8.0 or later" ) );
+  throw QgsNotSupportedException( QObject::tr( "Calculating datum ensembles requires a QGIS build based on PROJ 8.0 or later" ) );
 #endif
 }
 
@@ -1334,11 +1434,16 @@ QgsProjectionFactors QgsCoordinateReferenceSystem::factors( const QgsPoint &poin
 
 QgsProjOperation QgsCoordinateReferenceSystem::operation() const
 {
+  if ( !d->mIsValid )
+    return QgsProjOperation();
+
   QgsProjOperation res;
 
   // we have to make a transformation object corresponding to the crs
   QString projString = toProj();
   projString.replace( QLatin1String( "+type=crs" ), QString() );
+  if ( projString.isEmpty() )
+    return QgsProjOperation();
 
   QgsProjUtils::proj_pj_unique_ptr transformation( proj_create( QgsProjContext::get(), projString.toUtf8().constData() ) );
   if ( !transformation )
@@ -1388,6 +1493,29 @@ QgsRectangle QgsCoordinateReferenceSystem::bounds() const
   rect.setXMaximum( eastLon );
   rect.setYMaximum( northLat );
   return rect;
+}
+
+QString QgsCoordinateReferenceSystem::toOgcUri() const
+{
+  const auto parts { authid().split( ':' ) };
+  if ( parts.length() == 2 )
+  {
+    if ( parts[0] == QLatin1String( "EPSG" ) )
+      return  QStringLiteral( "http://www.opengis.net/def/crs/EPSG/0/%1" ).arg( parts[1] ) ;
+    else if ( parts[0] == QLatin1String( "OGC" ) )
+    {
+      return  QStringLiteral( "http://www.opengis.net/def/crs/OGC/1.3/%1" ).arg( parts[1] ) ;
+    }
+    else
+    {
+      QgsMessageLog::logMessage( QStringLiteral( "Error converting published CRS to URI %1: (not OGC or EPSG)" ).arg( authid() ), QStringLiteral( "CRS" ), Qgis::MessageLevel::Critical );
+    }
+  }
+  else
+  {
+    QgsMessageLog::logMessage( QStringLiteral( "Error converting published CRS to URI: %1" ).arg( authid() ), QStringLiteral( "CRS" ), Qgis::MessageLevel::Critical );
+  }
+  return QString();
 }
 
 void QgsCoordinateReferenceSystem::updateDefinition()
@@ -1860,6 +1988,8 @@ bool QgsCoordinateReferenceSystem::readXml( const QDomNode &node )
     {
       d->mCoordinateEpoch = std::numeric_limits< double >::quiet_NaN();
     }
+
+    mNativeFormat = qgsEnumKeyToValue<Qgis::CrsDefinitionFormat>( srsNode.toElement().attribute( QStringLiteral( "nativeFormat" ) ), Qgis::CrsDefinitionFormat::Wkt );
   }
   else
   {
@@ -1874,6 +2004,8 @@ bool QgsCoordinateReferenceSystem::writeXml( QDomNode &node, QDomDocument &doc )
 {
   QDomElement layerNode = node.toElement();
   QDomElement srsElement = doc.createElement( QStringLiteral( "spatialrefsys" ) );
+
+  srsElement.setAttribute( QStringLiteral( "nativeFormat" ), qgsEnumValueToKey<Qgis::CrsDefinitionFormat>( mNativeFormat ) );
 
   if ( std::isfinite( d->mCoordinateEpoch ) )
   {
@@ -2042,14 +2174,24 @@ void QgsCoordinateReferenceSystem::setValidationHint( const QString &html )
   mValidationHint = html;
 }
 
-QString QgsCoordinateReferenceSystem::validationHint()
+QString QgsCoordinateReferenceSystem::validationHint() const
 {
   return mValidationHint;
 }
 
-long QgsCoordinateReferenceSystem::saveAsUserCrs( const QString &name, Format nativeFormat )
+long QgsCoordinateReferenceSystem::saveAsUserCrs( const QString &name, Qgis::CrsDefinitionFormat nativeFormat )
 {
   return QgsApplication::coordinateReferenceSystemRegistry()->addUserCrs( *this, name, nativeFormat );
+}
+
+void QgsCoordinateReferenceSystem::setNativeFormat( Qgis::CrsDefinitionFormat format )
+{
+  mNativeFormat = format;
+}
+
+Qgis::CrsDefinitionFormat QgsCoordinateReferenceSystem::nativeFormat() const
+{
+  return mNativeFormat;
 }
 
 long QgsCoordinateReferenceSystem::getRecordCount()
@@ -2125,7 +2267,6 @@ void getOperationAndEllipsoidFromProjString( const QString &proj, QString &opera
   }
   operation = projMatch.captured( 1 );
 
-  thread_local const QRegularExpression ellipseRegExp( QStringLiteral( "\\+(?:ellps|datum)=(\\S+)" ) );
   const QRegularExpressionMatch ellipseMatch = projRegExp.match( proj );
   if ( ellipseMatch.hasMatch() )
   {
@@ -2186,8 +2327,6 @@ bool QgsCoordinateReferenceSystem::loadFromAuthCode( const QString &auth, const 
   d->setPj( std::move( crs ) );
 
   const QString dbVals = sAuthIdToQgisSrsIdMap.value( QStringLiteral( "%1:%2" ).arg( auth, code ).toUpper() );
-  QString srsId;
-  QString srId;
   if ( !dbVals.isEmpty() )
   {
     const QStringList parts = dbVals.split( ',' );
@@ -2359,8 +2498,8 @@ int QgsCoordinateReferenceSystem::syncDatabase()
 
   PROJ_STRING_LIST authorities = proj_get_authorities_from_database( pjContext );
 
-  int nextSrsId = 63560;
-  int nextSrId = 520003560;
+  int nextSrsId = 63561;
+  int nextSrId = 520003561;
   for ( auto authIter = authorities; authIter && *authIter; ++authIter )
   {
     const QString authority( *authIter );
@@ -2611,6 +2750,35 @@ const QHash<long, QgsCoordinateReferenceSystem> &QgsCoordinateReferenceSystem::s
   return *sSrsIdCache();
 }
 
+QgsCoordinateReferenceSystem QgsCoordinateReferenceSystem::toGeographicCrs() const
+{
+  if ( isGeographic() )
+  {
+    return *this;
+  }
+
+  if ( PJ *obj = d->threadLocalProjObject() )
+  {
+    PJ_CONTEXT *pjContext = QgsProjContext::get();
+    QgsProjUtils::proj_pj_unique_ptr geoCrs( proj_crs_get_geodetic_crs( pjContext, obj ) );
+    if ( !geoCrs )
+      return QgsCoordinateReferenceSystem();
+
+    if ( !testIsGeographic( geoCrs.get() ) )
+      return QgsCoordinateReferenceSystem();
+
+    QgsProjUtils::proj_pj_unique_ptr normalized( proj_normalize_for_visualization( pjContext, geoCrs.get() ) );
+    if ( !normalized )
+      return QgsCoordinateReferenceSystem();
+
+    return QgsCoordinateReferenceSystem::fromProjObject( normalized.get() );
+  }
+  else
+  {
+    return QgsCoordinateReferenceSystem();
+  }
+}
+
 QString QgsCoordinateReferenceSystem::geographicCrsAuthId() const
 {
   if ( isGeographic() )
@@ -2631,6 +2799,73 @@ QString QgsCoordinateReferenceSystem::geographicCrsAuthId() const
 PJ *QgsCoordinateReferenceSystem::projObject() const
 {
   return d->threadLocalProjObject();
+}
+
+QgsCoordinateReferenceSystem QgsCoordinateReferenceSystem::fromProjObject( PJ *object )
+{
+  QgsCoordinateReferenceSystem crs;
+  crs.createFromProjObject( object );
+  return crs;
+}
+
+bool QgsCoordinateReferenceSystem::createFromProjObject( PJ *object )
+{
+  d.detach();
+  d->mIsValid = false;
+  d->mProj4.clear();
+  d->mWktPreferred.clear();
+
+  if ( !object )
+  {
+    return false;
+  }
+
+  switch ( proj_get_type( object ) )
+  {
+    case PJ_TYPE_GEODETIC_CRS:
+    case PJ_TYPE_GEOCENTRIC_CRS:
+    case PJ_TYPE_GEOGRAPHIC_CRS:
+    case PJ_TYPE_GEOGRAPHIC_2D_CRS:
+    case PJ_TYPE_GEOGRAPHIC_3D_CRS:
+    case PJ_TYPE_VERTICAL_CRS:
+    case PJ_TYPE_PROJECTED_CRS:
+    case PJ_TYPE_COMPOUND_CRS:
+    case PJ_TYPE_TEMPORAL_CRS:
+    case PJ_TYPE_ENGINEERING_CRS:
+    case PJ_TYPE_BOUND_CRS:
+    case PJ_TYPE_OTHER_CRS:
+      break;
+
+    default:
+      return false;
+  }
+
+  d->setPj( QgsProjUtils::crsToSingleCrs( object ) );
+
+  if ( !d->hasPj() )
+  {
+    return d->mIsValid;
+  }
+  else
+  {
+    // maybe we can directly grab the auth name and code from the crs
+    const QString authName( proj_get_id_auth_name( d->threadLocalProjObject(), 0 ) );
+    const QString authCode( proj_get_id_code( d->threadLocalProjObject(), 0 ) );
+    if ( !authName.isEmpty() && !authCode.isEmpty() && loadFromAuthCode( authName, authCode ) )
+    {
+      return d->mIsValid;
+    }
+    else
+    {
+      // Still a valid CRS, just not a known one
+      d->mIsValid = true;
+      d->mDescription = QString( proj_get_name( d->threadLocalProjObject() ) );
+      setMapUnits();
+      d->mIsGeographic = testIsGeographic( d->threadLocalProjObject() );
+    }
+  }
+
+  return d->mIsValid;
 }
 
 QStringList QgsCoordinateReferenceSystem::recentProjections()

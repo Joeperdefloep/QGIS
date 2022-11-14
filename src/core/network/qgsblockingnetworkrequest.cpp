@@ -20,6 +20,7 @@
 #include "qgsauthmanager.h"
 #include "qgsmessagelog.h"
 #include "qgsfeedback.h"
+#include "qgsvariantutils.h"
 #include <QUrl>
 #include <QNetworkRequest>
 #include <QNetworkReply>
@@ -257,7 +258,7 @@ QgsBlockingNetworkRequest::ErrorCode QgsBlockingNetworkRequest::doRequest( QgsBl
       {
         waitConditionMutex.unlock();
 
-        QgsApplication::instance()->processEvents();
+        QgsApplication::processEvents();
         // we don't need to wake up the worker thread - it will automatically be woken when
         // the auth request has been dealt with by QgsNetworkAccessManager
       }
@@ -298,7 +299,7 @@ void QgsBlockingNetworkRequest::replyProgress( qint64 bytesReceived, qint64 byte
     if ( mReply->error() == QNetworkReply::NoError )
     {
       const QVariant redirect = mReply->attribute( QNetworkRequest::RedirectionTargetAttribute );
-      if ( !redirect.isNull() )
+      if ( !QgsVariantUtils::isNull( redirect ) )
       {
         // We don't want to emit downloadProgress() for a redirect
         return;
@@ -321,7 +322,7 @@ void QgsBlockingNetworkRequest::replyFinished()
     {
       QgsDebugMsgLevel( QStringLiteral( "reply OK" ), 2 );
       const QVariant redirect = mReply->attribute( QNetworkRequest::RedirectionTargetAttribute );
-      if ( !redirect.isNull() )
+      if ( !QgsVariantUtils::isNull( redirect ) )
       {
         QgsDebugMsgLevel( QStringLiteral( "Request redirected." ), 2 );
 

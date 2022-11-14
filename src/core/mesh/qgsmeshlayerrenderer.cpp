@@ -428,7 +428,7 @@ void QgsMeshLayerRenderer::renderFaceMesh(
     if ( context.renderingStopped() )
       break;
 
-    if ( i >= faces.count() )
+    if ( i < 0 || i >= faces.count() )
       continue;
 
     const QgsMeshFace &face = faces[i];
@@ -490,8 +490,6 @@ void QgsMeshLayerRenderer::renderScalarDatasetOnEdges( const QgsMeshRendererScal
   const QVector<QgsMeshEdge> edges = mTriangularMesh.edges();
   const QVector<QgsMeshVertex> vertices = mTriangularMesh.vertices();
   const QList<int> egdesInExtent = mTriangularMesh.edgeIndexesForRectangle( context.mapExtent() );
-  const QSet<int> nativeEdgesInExtent = QgsMeshUtils::nativeEdgesFromEdges( egdesInExtent,
-                                        mTriangularMesh.edgesToNativeEdges() );
 
   QgsInterpolatedLineRenderer edgePlotter;
   edgePlotter.setInterpolatedColor( QgsInterpolatedLineColor( scalarSettings.colorRampShader() ) );

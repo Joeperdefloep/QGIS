@@ -24,6 +24,7 @@
 #include "qgsvectorlayerref.h"
 #include "qgspostgresstringutils.h"
 #include "qgsmessagelog.h"
+#include "qgsvariantutils.h"
 
 #include <nlohmann/json.hpp>
 using namespace nlohmann;
@@ -91,7 +92,7 @@ QString QgsValueRelationFieldFormatter::representValue( QgsVectorLayer *layer, i
   }
   else
   {
-    if ( value.isNull() )
+    if ( QgsVariantUtils::isNull( value ) )
     {
       return QgsApplication::nullRepresentation();
     }
@@ -110,7 +111,7 @@ QString QgsValueRelationFieldFormatter::representValue( QgsVectorLayer *layer, i
 
 QVariant QgsValueRelationFieldFormatter::sortValue( QgsVectorLayer *layer, int fieldIndex, const QVariantMap &config, const QVariant &cache, const QVariant &value ) const
 {
-  return value.isNull() ? QString() : representValue( layer, fieldIndex, config, cache, value );
+  return QgsVariantUtils::isNull( value ) ? QString() : representValue( layer, fieldIndex, config, cache, value );
 }
 
 QVariant QgsValueRelationFieldFormatter::createCache( QgsVectorLayer *layer, int fieldIndex, const QVariantMap &config ) const
@@ -331,7 +332,8 @@ QSet<QString> QgsValueRelationFieldFormatter::expressionParentFormAttributes( co
     QgsExpressionFunction *fd = QgsExpression::QgsExpression::Functions()[f->fnIndex()];
     if ( formFunctions.contains( fd->name( ) ) )
     {
-      for ( const auto &param : f->args( )->list() )
+      const QList<QgsExpressionNode *> cExpressionNodes { f->args( )->list() };
+      for ( const auto &param : std::as_const( cExpressionNodes ) )
       {
         attributes.insert( param->eval( &exp, &context ).toString() );
       }
@@ -355,7 +357,8 @@ QSet<QString> QgsValueRelationFieldFormatter::expressionFormAttributes( const QS
     QgsExpressionFunction *fd = QgsExpression::QgsExpression::Functions()[f->fnIndex()];
     if ( formFunctions.contains( fd->name( ) ) )
     {
-      for ( const auto &param : f->args( )->list() )
+      const QList<QgsExpressionNode *> cExpressionNodes { f->args( )->list() };
+      for ( const auto &param : std::as_const( cExpressionNodes ) )
       {
         attributes.insert( param->eval( &exp, &context ).toString() );
       }
@@ -371,7 +374,7 @@ bool QgsValueRelationFieldFormatter::expressionIsUsable( const QString &expressi
   const QSet<QString> attrs = expressionFormAttributes( expression );
   for ( auto it = attrs.constBegin() ; it != attrs.constEnd(); it++ )
   {
-    if ( ! feature.attribute( *it ).isValid() )
+    if ( feature.fieldNameIndex( *it ) < 0 )
       return false;
   }
 

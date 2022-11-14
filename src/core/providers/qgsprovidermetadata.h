@@ -32,6 +32,7 @@
 #include "qgis_core.h"
 #include <functional>
 #include "qgsabstractproviderconnection.h"
+#include "qgsabstractlayermetadataprovider.h"
 #include "qgsfields.h"
 #include "qgsexception.h"
 
@@ -190,6 +191,7 @@ class CORE_EXPORT QgsProviderMetadata : public QObject
       PriorityForUri = 1 << 0, //!< Indicates that the metadata can calculate a priority for a URI
       LayerTypesForUri = 1 << 1, //!< Indicates that the metadata can determine valid layer types for a URI
       QuerySublayers = 1 << 2, //!< Indicates that the metadata can query sublayers for a URI (since QGIS 3.22)
+      CreateDatabase = 1 << 3, //!< Indicates that the metadata can create new empty databases (since QGIS 3.28)
     };
     Q_DECLARE_FLAGS( ProviderMetadataCapabilities, ProviderMetadataCapability )
 
@@ -245,6 +247,13 @@ class CORE_EXPORT QgsProviderMetadata : public QObject
     QString description() const;
 
     /**
+     * Returns an icon representing the provider.
+     *
+     * \since QGIS 3.26
+     */
+    virtual QIcon icon() const;
+
+    /**
      * Returns the provider metadata capabilities.
      *
      * \since QGIS 3.18
@@ -257,6 +266,51 @@ class CORE_EXPORT QgsProviderMetadata : public QObject
      * \since QGIS 3.18.1
      */
     virtual QgsProviderMetadata::ProviderCapabilities providerCapabilities() const;
+
+    /**
+     * Returns a list of the map layer types supported by the provider.
+     *
+     * \since QGIS 3.26
+     */
+#ifndef SIP_RUN
+    virtual QList< QgsMapLayerType > supportedLayerTypes() const;
+#else
+    SIP_PYOBJECT supportedLayerTypes() const SIP_TYPEHINT( List[QgsMapLayerType] );
+    % MethodCode
+    // adapted from the qpymultimedia_qlist.sip file from the PyQt6 sources
+
+    const QList< QgsMapLayerType > cppRes = sipCpp->supportedLayerTypes();
+
+    PyObject *l = PyList_New( cppRes.size() );
+
+    if ( !l )
+      sipIsErr = 1;
+    else
+    {
+      for ( int i = 0; i < cppRes.size(); ++i )
+      {
+        PyObject *eobj = sipConvertFromEnum( static_cast<int>( cppRes.at( i ) ),
+                                             sipType_QgsMapLayerType );
+
+        if ( !eobj )
+        {
+          sipIsErr = 1;
+        }
+
+        PyList_SetItem( l, i, eobj );
+      }
+
+      if ( !sipIsErr )
+      {
+        sipRes = l;
+      }
+      else
+      {
+        Py_DECREF( l );
+      }
+    }
+    % End
+#endif
 
     /**
      * This returns the library file name
@@ -451,6 +505,23 @@ class CORE_EXPORT QgsProviderMetadata : public QObject
 #endif
 
     /**
+     * Creates a new empty database at the specified \a uri.
+     *
+     * This method can be used for supported providers to construct a new empty database. For instance, the OGR provider
+     * metadata createDatabase() method can be used to create new empty GeoPackage or FileGeodatabase databases.
+     *
+     * \param uri destination URI for newly created database.
+     * \param errorMessage will be set to a descriptive error message if the database could not be successfully created.
+     *
+     * \returns TRUE if the database was successfully created
+     *
+     * \note This method is only supported by providers which return the QgsProviderMetadata::ProviderMetadataCapability::CreateDatabase capability.
+     *
+     * \since QGIS 3.28
+     */
+    virtual bool createDatabase( const QString &uri, QString &errorMessage SIP_OUT );
+
+    /**
      * Creates a new instance of the raster data provider.
      * \since QGIS 3.10
      */
@@ -536,19 +607,42 @@ class CORE_EXPORT QgsProviderMetadata : public QObject
                             QStringList &descriptions, QString &errCause );
 
     /**
+     * Returns TRUE if a layer style with the specified \a styleId exists in the provider defined by \a uri.
+     *
+     * \param uri provider URI
+     * \param styleId style ID to test for
+     * \param errorCause will be set to a descriptive error message, if an error occurs while checking if the style exists
+     * \returns TRUE if the layer style already exists
+     *
+     * \see getStyleById()
+     * \since QGIS 3.24
+     */
+    virtual bool styleExists( const QString &uri, const QString &styleId, QString &errorCause SIP_OUT );
+
+    /**
      * Gets a layer style defined by \a uri
+     *
+     * \see styleExists()
+     *
      * \since QGIS 3.10
      */
-    virtual QString getStyleById( const QString &uri, QString styleId, QString &errCause );
+    virtual QString getStyleById( const QString &uri, const QString &styleId, QString &errCause );
 
     /**
      * Deletes a layer style defined by \a styleId
      * \since QGIS 3.10
      */
-    virtual bool deleteStyleById( const QString &uri, QString styleId, QString &errCause );
+    virtual bool deleteStyleById( const QString &uri, const QString &styleId, QString &errCause );
 
     /**
-     * Saves a layer style to provider
+     * Saves a layer style to provider.
+     *
+     * \note Prior to QGIS 3.24, this method would show a message box warning when a
+     * style with the same \a styleName already existed to confirm replacing the style with the user.
+     * Since 3.24, calling this method will ALWAYS overwrite any existing style with the same name.
+     * Use styleExists() to test in advance if a style already exists and handle this appropriately
+     * in your client code.
+     *
      * \since QGIS 3.10
      */
     virtual bool saveStyle( const QString &uri, const QString &qmlStyle, const QString &sldStyle,
@@ -560,6 +654,16 @@ class CORE_EXPORT QgsProviderMetadata : public QObject
      * \since QGIS 3.10
      */
     virtual QString loadStyle( const QString &uri, QString &errCause );
+
+    /**
+     * Loads a layer style from the provider storage, reporting its name.
+     * \param uri data source uri
+     * \param styleName the name of the style if available, empty otherwise
+     * \param errCause report errors
+     * \returns the style QML (XML)
+     * \since QGIS 3.30
+     */
+    virtual QString loadStoredStyle( const QString &uri, QString &styleName, QString &errCause );
 
     /**
      * Saves \a metadata to the layer corresponding to the specified \a uri.

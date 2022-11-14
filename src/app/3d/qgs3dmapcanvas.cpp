@@ -45,7 +45,7 @@ Qgs3DMapCanvas::Qgs3DMapCanvas( QWidget *parent )
   const QgsSettings setting;
   mEngine = new QgsWindow3DEngine( this );
 
-  connect( mEngine, &QgsAbstract3DEngine::imageCaptured, [ = ]( const QImage & image )
+  connect( mEngine, &QgsAbstract3DEngine::imageCaptured, this, [ = ]( const QImage & image )
   {
     image.save( mCaptureFileName, mCaptureFileFormat.toLocal8Bit().data() );
     mEngine->setRenderCaptureEnabled( false );
@@ -70,7 +70,24 @@ Qgs3DMapCanvas::Qgs3DMapCanvas( QWidget *parent )
   mEngine->window()->setCursor( Qt::OpenHandCursor );
   mEngine->window()->installEventFilter( this );
 
-  mEngine->setSize( mContainer->size() );
+  connect( mSplitter, &QSplitter::splitterMoved, this, [&]( int, int )
+  {
+    QRect viewportRect( QPoint( 0, 0 ), mContainer->size() );
+    mScene->cameraController()->setViewport( viewportRect );
+    mEngine->setSize( viewportRect.size() );
+  } );
+
+  connect( mNavigationWidget, &Qgs3DNavigationWidget::sizeChanged, this, [&]( const QSize & newSize )
+  {
+    QSize widgetSize = size();
+    QRect viewportRect( QPoint( 0, 0 ), QSize( widgetSize.width() - newSize.width(), widgetSize.height() ) );
+    if ( mScene && mScene->cameraController() )
+      mScene->cameraController()->setViewport( viewportRect );
+    mEngine->setSize( viewportRect.size() );
+  } );
+
+  QRect viewportRect( QPoint( 0, 0 ), mContainer->size() );
+  mEngine->setSize( viewportRect.size() );
 }
 
 Qgs3DMapCanvas::~Qgs3DMapCanvas()
@@ -78,9 +95,9 @@ Qgs3DMapCanvas::~Qgs3DMapCanvas()
   if ( mMapTool )
     mMapTool->deactivate();
   // make sure the scene is deleted while map settings object is still alive
-  delete mScene;
+  mScene->deleteLater();
   mScene = nullptr;
-  delete mMap;
+  mMap->deleteLater();
   mMap = nullptr;
 }
 
@@ -91,7 +108,7 @@ void Qgs3DMapCanvas::resizeEvent( QResizeEvent *ev )
   if ( !mScene )
     return;
 
-  const QRect viewportRect( QPoint( 0, 0 ), size() );
+  QRect viewportRect( QPoint( 0, 0 ), mContainer->size() );
   mScene->cameraController()->setViewport( viewportRect );
 
   mEngine->setSize( viewportRect.size() );
@@ -103,7 +120,7 @@ void Qgs3DMapCanvas::setMap( Qgs3DMapSettings *map )
   Q_ASSERT( !mMap );
   Q_ASSERT( !mScene );
 
-  const QRect viewportRect( QPoint( 0, 0 ), size() );
+  QRect viewportRect( QPoint( 0, 0 ), mContainer->size() );
   Qgs3DMapScene *newScene = new Qgs3DMapScene( *map, mEngine );
 
   mEngine->setSize( viewportRect.size() );
@@ -116,9 +133,12 @@ void Qgs3DMapCanvas::setMap( Qgs3DMapSettings *map )
   mScene = newScene;
   connect( mScene, &Qgs3DMapScene::fpsCountChanged, this, &Qgs3DMapCanvas::fpsCountChanged );
   connect( mScene, &Qgs3DMapScene::fpsCounterEnabledChanged, this, &Qgs3DMapCanvas::fpsCounterEnabledChanged );
+  connect( mScene, &Qgs3DMapScene::viewed2DExtentFrom3DChanged, this, &Qgs3DMapCanvas::viewed2DExtentFrom3DChanged );
 
   delete mMap;
   mMap = map;
+
+  mScene->cameraController()->setViewport( viewportRect );
 
   resetView();
 
@@ -130,7 +150,10 @@ void Qgs3DMapCanvas::setMap( Qgs3DMapSettings *map )
   } );
   connect( cameraController(), &QgsCameraController::cameraMovementSpeedChanged, mMap, &Qgs3DMapSettings::setCameraMovementSpeed );
   connect( cameraController(), &QgsCameraController::cameraMovementSpeedChanged, this, &Qgs3DMapCanvas::cameraNavigationSpeedChanged );
-  connect( cameraController(), &QgsCameraController::navigationModeHotKeyPressed, this, &Qgs3DMapCanvas::onNavigationModeHotKeyPressed );
+  connect( cameraController(), &QgsCameraController::navigationModeChanged, this, &Qgs3DMapCanvas::onNavigationModeChanged );
+  connect( cameraController(), &QgsCameraController::requestDepthBufferCapture, this, &Qgs3DMapCanvas::captureDepthBuffer );
+
+  connect( mEngine, &QgsAbstract3DEngine::depthBufferCaptured, cameraController(), &QgsCameraController::depthBufferCaptured );
 
   emit mapSettingsChanged();
 }
@@ -144,8 +167,10 @@ void Qgs3DMapCanvas::resetView( bool resetExtent )
 {
   if ( resetExtent )
   {
-    if ( map()->terrainGenerator() && ( map()->terrainGenerator()->type() == QgsTerrainGenerator::Flat ||
-                                        map()->terrainGenerator()->type() == QgsTerrainGenerator::Online ) )
+    if ( map()->terrainRenderingEnabled()
+         && map()->terrainGenerator()
+         && ( map()->terrainGenerator()->type() == QgsTerrainGenerator::Flat ||
+              map()->terrainGenerator()->type() == QgsTerrainGenerator::Online ) )
     {
       const QgsReferencedRectangle extent = QgsProject::instance()->viewSettings()->fullExtent();
       QgsCoordinateTransform ct( extent.crs(), map()->crs(), QgsProject::instance()->transformContext() );
@@ -159,14 +184,13 @@ void Qgs3DMapCanvas::resetView( bool resetExtent )
       {
         rect = extent;
       }
-      if ( map()->terrainGenerator() )
-        map()->terrainGenerator()->setExtent( rect );
+      map()->terrainGenerator()->setExtent( rect );
 
       const QgsRectangle te = mScene->sceneExtent();
       const QgsPointXY center = te.center();
       map()->setOrigin( QgsVector3D( center.x(), center.y(), 0 ) );
     }
-    if ( !map()->terrainGenerator() )
+    if ( !map()->terrainRenderingEnabled() || !map()->terrainGenerator() )
     {
       const QgsReferencedRectangle extent = QgsProject::instance()->viewSettings()->fullExtent();
       QgsCoordinateTransform ct( extent.crs(), map()->crs(), QgsProject::instance()->transformContext() );
@@ -196,7 +220,7 @@ void Qgs3DMapCanvas::setViewFromTop( const QgsPointXY &center, float distance, f
   mScene->cameraController()->setViewFromTop( worldX, -worldY, distance, rotation );
 }
 
-void Qgs3DMapCanvas::saveAsImage( const QString fileName, const QString fileFormat )
+void Qgs3DMapCanvas::saveAsImage( const QString &fileName, const QString &fileFormat )
 {
   if ( !fileName.isEmpty() )
   {
@@ -207,13 +231,27 @@ void Qgs3DMapCanvas::saveAsImage( const QString fileName, const QString fileForm
     Qt3DLogic::QFrameAction *screenCaptureFrameAction = new Qt3DLogic::QFrameAction;
     mScene->addComponent( screenCaptureFrameAction );
     // Wait to have the render capture enabled in the next frame
-    connect( screenCaptureFrameAction, &Qt3DLogic::QFrameAction::triggered, [ = ]( float )
+    connect( screenCaptureFrameAction, &Qt3DLogic::QFrameAction::triggered, this, [ = ]( float )
     {
       mEngine->requestCaptureImage();
       mScene->removeComponent( screenCaptureFrameAction );
       screenCaptureFrameAction->deleteLater();
     } );
   }
+}
+
+void Qgs3DMapCanvas::captureDepthBuffer()
+{
+  // Setup a frame action that is used to wait until next frame
+  Qt3DLogic::QFrameAction *screenCaptureFrameAction = new Qt3DLogic::QFrameAction;
+  mScene->addComponent( screenCaptureFrameAction );
+  // Wait to have the render capture enabled in the next frame
+  connect( screenCaptureFrameAction, &Qt3DLogic::QFrameAction::triggered, this, [ = ]( float )
+  {
+    mEngine->requestDepthBufferCapture();
+    mScene->removeComponent( screenCaptureFrameAction );
+    screenCaptureFrameAction->deleteLater();
+  } );
 }
 
 void Qgs3DMapCanvas::setMapTool( Qgs3DMapTool *tool )
@@ -310,8 +348,17 @@ QSize Qgs3DMapCanvas::windowSize() const
   return mEngine->size();
 }
 
-void Qgs3DMapCanvas::onNavigationModeHotKeyPressed( QgsCameraController::NavigationMode mode )
+void Qgs3DMapCanvas::onNavigationModeChanged( QgsCameraController::NavigationMode mode )
 {
   mMap->setCameraNavigationMode( mode );
-  mScene->cameraController()->setCameraNavigationMode( mode );
+}
+
+void Qgs3DMapCanvas::setViewFrom2DExtent( const QgsRectangle &extent )
+{
+  mScene->setViewFrom2DExtent( extent );
+}
+
+QVector<QgsPointXY> Qgs3DMapCanvas::viewFrustum2DExtent()
+{
+  return mScene->viewFrustum2DExtent();
 }

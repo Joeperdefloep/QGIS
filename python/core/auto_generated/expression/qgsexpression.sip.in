@@ -306,6 +306,21 @@ method will return the corresponding field index.
 .. versionadded:: 3.22
 %End
 
+    static QString quoteFieldExpression( const QString &expression, const QgsVectorLayer *layer );
+%Docstring
+Validate if the expression is a field in the ``layer`` and ensure it is quoted.
+
+Given a string which may either directly match a field name from a layer, OR may
+be an expression which consists only of a single field reference for that layer, this
+method will return the quoted field.
+
+:return: the ``expression`` if not a field or quotes are not required, otherwise returns a quoted field.
+
+.. seealso:: :py:func:`expressionToLayerFieldIndex`
+
+.. versionadded:: 3.24
+%End
+
     static bool checkExpression( const QString &text, const QgsExpressionContext *context, QString &errorMessage /Out/ );
 %Docstring
 Tests whether a string is a valid expression.
@@ -673,13 +688,14 @@ length, and presents text representations of non numeric/text types (e.g., geome
 .. versionadded:: 2.14
 %End
 
-    static QString createFieldEqualityExpression( const QString &fieldName, const QVariant &value );
+    static QString createFieldEqualityExpression( const QString &fieldName, const QVariant &value, QVariant::Type fieldType = QVariant::Type::Invalid );
 %Docstring
 Create an expression allowing to evaluate if a field is equal to a
 value. The value may be null.
 
 :param fieldName: the name of the field
 :param value: the value of the field
+:param fieldType: the type of the field on the left side used to quote the value. If not given, the value type is used instead
 
 :return: the expression to evaluate field equality
 

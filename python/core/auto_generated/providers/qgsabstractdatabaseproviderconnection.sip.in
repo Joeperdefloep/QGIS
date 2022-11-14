@@ -9,6 +9,7 @@
 
 
 
+
 class QgsAbstractDatabaseProviderConnection : QgsAbstractProviderConnection
 {
 %Docstring(signature="appended")
@@ -125,7 +126,7 @@ Returns the number of rows returned by a SELECT query or Qgis.FeatureCountState.
 
 
 
-        double queryExecutionTime( );
+        double queryExecutionTime( ) const;
 %Docstring
 Returns the query execution time in milliseconds.
 %End
@@ -349,6 +350,12 @@ This information is calculated from the geometry columns types.
       DeleteField,
       DeleteFieldCascade,
       AddField,
+      ListFieldDomains,
+      RetrieveFieldDomain,
+      SetFieldDomain,
+      AddFieldDomain,
+      RenameField,
+      RetrieveRelationships,
     };
     typedef QFlags<QgsAbstractDatabaseProviderConnection::Capability> Capabilities;
 
@@ -358,7 +365,10 @@ This information is calculated from the geometry columns types.
       Z,
       M,
       SinglePart,
-      Curves
+      Curves,
+      SinglePoint,
+      SingleLineString,
+      SinglePolygon,
     };
 
     typedef QFlags<QgsAbstractDatabaseProviderConnection::GeometryColumnCapability> GeometryColumnCapabilities;
@@ -523,6 +533,25 @@ Adds a field.
 :raises QgsProviderConnectionException: if any errors are encountered.
 
 .. versionadded:: 3.16
+%End
+
+    virtual void renameField( const QString &schema, const QString &tableName, const QString &name, const QString &newName ) const throw( QgsProviderConnectionException );
+%Docstring
+Renames an existing field.
+
+:param schema: name of the schema (schema is ignored if not supported by the backend).
+:param tableName: name of the table
+:param name: current name of field
+:param newName: new name for field
+
+.. note::
+
+   it is responsibility of the caller to handle open layers and registry entries.
+
+
+:raises QgsProviderConnectionException: if any errors are encountered.
+
+.. versionadded:: 3.28
 %End
 
     virtual void renameSchema( const QString &name, const QString &newName ) const throw( QgsProviderConnectionException );
@@ -691,6 +720,115 @@ The default implementation returns an list of common reserved words under the
 Subclasses should add provider- and/or connection- specific words.
 
 .. versionadded:: 3.22
+%End
+
+    virtual QStringList fieldDomainNames() const throw( QgsProviderConnectionException );
+%Docstring
+Returns a list of field domain names present on the provider.
+
+This is supported on providers with the Capability.ListFieldDomains capability only.
+
+:raises QgsProviderConnectionException: if any errors are encountered.
+
+.. seealso:: :py:func:`fieldDomain`
+
+.. versionadded:: 3.26
+%End
+
+    virtual QList< Qgis::FieldDomainType > supportedFieldDomainTypes() const;
+%Docstring
+Returns a list of field domain types which are supported by the provider.
+
+.. versionadded:: 3.28
+%End
+
+    virtual QgsFieldDomain *fieldDomain( const QString &name ) const throw( QgsProviderConnectionException ) /Factory/;
+%Docstring
+Returns the field domain with the specified ``name`` from the provider.
+
+The caller takes ownership of the return object. Will return ``None`` if no matching field domain is found.
+
+This is supported on providers with the Capability.RetrieveFieldDomain capability only.
+
+:raises QgsProviderConnectionException: if any errors are encountered.
+
+.. seealso:: :py:func:`fieldDomainNames`
+
+.. versionadded:: 3.26
+%End
+
+    virtual void setFieldDomainName( const QString &fieldName, const QString &schema, const QString &tableName, const QString &domainName ) const throw( QgsProviderConnectionException );
+%Docstring
+Sets the field domain name for the existing field with the specified name.
+
+:param fieldName: name of the field to be modified
+:param schema: name of the schema (schema is ignored if not supported by the backend).
+:param tableName: name of the table
+:param domainName: name of the domain to set for the field. Must be an existing field domain (see :py:func:`~QgsAbstractDatabaseProviderConnection.fieldDomainNames`). Set to an empty string to remove a previously set domain.
+
+:raises QgsProviderConnectionException: if any errors are encountered.
+
+.. versionadded:: 3.26
+%End
+
+    virtual void addFieldDomain( const QgsFieldDomain &domain, const QString &schema ) const throw( QgsProviderConnectionException );
+%Docstring
+Adds a new field ``domain`` to the database.
+
+:param domain: field domain to add
+:param schema: name of the schema (schema is ignored if not supported by the backend).
+
+:raises QgsProviderConnectionException: if any errors are encountered.
+
+.. versionadded:: 3.26
+%End
+
+    virtual QList< QgsWeakRelation > relationships( const QString &schema = QString(), const QString &tableName = QString() ) const throw( QgsProviderConnectionException );
+%Docstring
+Returns a list of relationships detected in the database.
+
+This is supported on providers with the Capability.RetrieveRelationships capability only.
+
+If a ``schema`` and/or ``tableName`` are specified, then only relationships where the specified table
+forms the left (or "parent" / "referenced") side of the relationship are retrieved.
+
+:raises QgsProviderConnectionException: if any errors are encountered.
+
+.. versionadded:: 3.28
+%End
+
+    virtual QgsProviderSqlQueryBuilder *queryBuilder() const /Factory/;
+%Docstring
+Returns a SQL query builder for the connection, which provides an interface for provider-specific creation of SQL queries.
+
+The caller takes ownership of the returned object.
+
+.. versionadded:: 3.28
+%End
+
+    virtual QList<QgsLayerMetadataProviderResult> searchLayerMetadata( const QgsMetadataSearchContext &searchContext, const QString &searchString = QString(), const QgsRectangle &geographicExtent = QgsRectangle(), QgsFeedback *feedback = 0 ) const throw( QgsProviderConnectionException, QgsNotSupportedException );
+%Docstring
+Search the stored layer metadata in the connection,
+optionally limiting the search to the metadata identifier, title,
+abstract, keywords and categories.
+``searchContext`` context for the search
+``searchString`` limit the search to metadata having an extent intersecting ``geographicExtent``,
+an optional ``feedback`` can be used to monitor and control the search process.
+
+The default implementation raises a :py:class:`QgsNotSupportedException`, data providers may implement
+the search functionality.
+
+A :py:class:`QgsProviderConnectionException` is raised in case of errors happening during the search for
+providers that implement the search functionality.
+
+:return: a (possibly empty) list of :py:class:`QgsLayerMetadataProviderResult`, throws a :py:class:`QgsProviderConnectionException`
+         if any error occurred during the search.
+
+:raises QgsProviderConnectionException: 
+
+:raises QgsNotSupportedException: 
+
+.. versionadded:: 3.28
 %End
 
   protected:

@@ -968,7 +968,7 @@ void TestQgsCircularString::crsTransform()
   QGSCOMPARENEAR( cs.pointN( 1 ).z(), 3, 0.001 );
   QCOMPARE( cs.pointN( 1 ).m(), 4.0 );
 
-#if PROJ_VERSION_MAJOR<6 // note - z value transform doesn't currently work with proj 6+, because we don't yet support compound CRS definitions
+#if 0 // note - z value transform doesn't currently work with proj 6+, because we don't yet support compound CRS definitions
   //z value transform
   cs.transform( tr, Qgis::TransformDirection::Forward, true );
 
@@ -2253,11 +2253,11 @@ void TestQgsCircularString::orientation()
 
   cs.setPoints( QgsPointSequence() << QgsPoint( 0, 0 ) << QgsPoint( 0, 1 )
                 << QgsPoint( 1, 1 ) << QgsPoint( 1, 0 ) << QgsPoint( 0, 0 ) );
-  QCOMPARE( cs.orientation(), QgsCurve::Clockwise );
+  QCOMPARE( cs.orientation(), Qgis::AngularDirection::Clockwise );
 
   cs.setPoints( QgsPointSequence() << QgsPoint( 0, 0 ) << QgsPoint( 1, 0 )
                 << QgsPoint( 1, 1 ) << QgsPoint( 0, 1 ) << QgsPoint( 0, 0 ) );
-  QCOMPARE( cs.orientation(), QgsCurve::CounterClockwise );
+  QCOMPARE( cs.orientation(), Qgis::AngularDirection::CounterClockwise );
 }
 
 void TestQgsCircularString::constructorFromArray()

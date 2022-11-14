@@ -21,6 +21,7 @@
 
 #include "qgsrasterdataprovider.h"
 
+#include "qgshttpheaders.h"
 #include <QNetworkRequest>
 
 #include "qgscoordinatereferencesystem.h"
@@ -152,7 +153,7 @@ class QgsAmsProvider : public QgsRasterDataProvider
     QString mError;
     QImage mCachedImage;
     QgsRectangle mCachedImageExtent;
-    QgsStringMap mRequestHeaders;
+    QgsHttpHeaders mRequestHeaders;
     int mTileReqNo = 0;
     bool mTiled = false;
     bool mImageServer = false;
@@ -173,7 +174,7 @@ class QgsAmsTiledImageDownloadHandler : public QObject
     Q_OBJECT
   public:
 
-    QgsAmsTiledImageDownloadHandler( const QString &auth,  const QgsStringMap &requestHeaders, int reqNo, const QgsAmsProvider::TileRequests &requests, QImage *image, const QgsRectangle &viewExtent, QgsRasterBlockFeedback *feedback );
+    QgsAmsTiledImageDownloadHandler( const QString &auth,  const QgsHttpHeaders &requestHeaders, int reqNo, const QgsAmsProvider::TileRequests &requests, QImage *image, const QgsRectangle &viewExtent, QgsRasterBlockFeedback *feedback );
     ~QgsAmsTiledImageDownloadHandler() override;
 
     void downloadBlocking();
@@ -204,7 +205,7 @@ class QgsAmsTiledImageDownloadHandler : public QObject
     void finish() { QMetaObject::invokeMethod( mEventLoop, "quit", Qt::QueuedConnection ); }
 
     QString mAuth;
-    QgsStringMap mRequestHeaders;
+    QgsHttpHeaders mRequestHeaders;
 
     QImage *mImage = nullptr;
     QgsRectangle mViewExtent;
@@ -221,11 +222,14 @@ class QgsAmsTiledImageDownloadHandler : public QObject
 
 class QgsAmsProviderMetadata: public QgsProviderMetadata
 {
+    Q_OBJECT
   public:
     QgsAmsProviderMetadata();
+    QIcon icon() const override;
     QgsAmsProvider *createProvider( const QString &uri, const QgsDataProvider::ProviderOptions &options, QgsDataProvider::ReadFlags flags = QgsDataProvider::ReadFlags() ) override;
     QVariantMap decodeUri( const QString &uri ) const override;
     QString encodeUri( const QVariantMap &parts ) const override;
+    QList< QgsMapLayerType > supportedLayerTypes() const override;
 };
 
 #endif // QGSMAPSERVERPROVIDER_H

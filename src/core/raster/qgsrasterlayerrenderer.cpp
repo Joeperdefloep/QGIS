@@ -22,7 +22,7 @@
 #include "qgsrasterlayer.h"
 #include "qgsrasterprojector.h"
 #include "qgsrendercontext.h"
-#include "qgsproject.h"
+#include "qgsrasterrenderer.h"
 #include "qgsexception.h"
 #include "qgsrasterlayertemporalproperties.h"
 #include "qgsmapclippingutils.h"
@@ -59,8 +59,8 @@ void QgsRasterLayerRendererFeedback::onNewData()
   feedback.setPreviewOnly( true );
   feedback.setRenderPartialOutput( true );
   QgsRasterIterator iterator( mR->mPipe->last() );
-  QgsRasterDrawer drawer( &iterator, mR->renderContext()->dpiTarget() );
-  drawer.draw( mR->renderContext()->painter(), mR->mRasterViewPort, &mR->renderContext()->mapToPixel(), &feedback );
+  QgsRasterDrawer drawer( &iterator );
+  drawer.draw( *( mR->renderContext() ), mR->mRasterViewPort, &feedback );
   mR->mReadyToCompose = true;
   QgsDebugMsgLevel( QStringLiteral( "total raster preview time: %1 ms" ).arg( t.elapsed() ), 3 );
   mLastPreview = QTime::currentTime();
@@ -70,6 +70,7 @@ void QgsRasterLayerRendererFeedback::onNewData()
 ///
 QgsRasterLayerRenderer::QgsRasterLayerRenderer( QgsRasterLayer *layer, QgsRenderContext &rendererContext )
   : QgsMapLayerRenderer( layer->id(), &rendererContext )
+  , mLayerOpacity( layer->opacity() )
   , mProviderCapabilities( static_cast<QgsRasterDataProvider::Capability>( layer->dataProvider()->capabilities() ) )
   , mFeedback( new QgsRasterLayerRendererFeedback( this ) )
 {
@@ -202,11 +203,11 @@ QgsRasterLayerRenderer::QgsRasterLayerRenderer( QgsRasterLayer *layer, QgsRender
   mRasterViewPort->mWidth = static_cast<qgssize>( std::abs( mRasterViewPort->mBottomRightPoint.x() - mRasterViewPort->mTopLeftPoint.x() ) );
   mRasterViewPort->mHeight = static_cast<qgssize>( std::abs( mRasterViewPort->mBottomRightPoint.y() - mRasterViewPort->mTopLeftPoint.y() ) );
 
-
+  const double dpi = 25.4 * rendererContext.scaleFactor();
   if ( mProviderCapabilities & QgsRasterDataProvider::DpiDependentData
        && rendererContext.dpiTarget() >= 0.0 )
   {
-    const double dpiScaleFactor = rendererContext.dpiTarget() / rendererContext.painter()->device()->logicalDpiX();
+    const double dpiScaleFactor = rendererContext.dpiTarget() / dpi;
     mRasterViewPort->mWidth *= dpiScaleFactor;
     mRasterViewPort->mHeight *= dpiScaleFactor;
   }
@@ -240,8 +241,7 @@ QgsRasterLayerRenderer::QgsRasterLayerRenderer( QgsRasterLayer *layer, QgsRender
   // TODO R->mLastViewPort = *mRasterViewPort;
 
   // TODO: is it necessary? Probably WMS only?
-  layer->dataProvider()->setDpi( 25.4 * rendererContext.scaleFactor() );
-
+  layer->dataProvider()->setDpi( dpi );
 
   // copy the whole raster pipe!
   mPipe = new QgsRasterPipe( *layer->pipe() );
@@ -282,6 +282,8 @@ QgsRasterLayerRenderer::QgsRasterLayerRenderer( QgsRasterLayer *layer, QgsRender
   }
 
   mClippingRegions = QgsMapClippingUtils::collectClippingRegionsForLayer( *renderContext(), layer );
+
+  mFeedback->setRenderContext( rendererContext );
 }
 
 QgsRasterLayerRenderer::~QgsRasterLayerRenderer()
@@ -342,8 +344,8 @@ bool QgsRasterLayerRenderer::render()
 
   // Drawer to pipe?
   QgsRasterIterator iterator( mPipe->last() );
-  QgsRasterDrawer drawer( &iterator, renderContext()->dpiTarget() );
-  drawer.draw( renderContext()->painter(), mRasterViewPort, &renderContext()->mapToPixel(), mFeedback );
+  QgsRasterDrawer drawer( &iterator );
+  drawer.draw( *( renderContext() ), mRasterViewPort, mFeedback );
 
   if ( restoreOldResamplingStage )
   {
@@ -369,7 +371,19 @@ QgsFeedback *QgsRasterLayerRenderer::feedback() const
 
 bool QgsRasterLayerRenderer::forceRasterRender() const
 {
-  // preview of intermediate raster rendering results requires a temporary output image
-  return renderContext()->testFlag( Qgis::RenderContextFlag::RenderPartialOutput );
-}
+  if ( !mRasterViewPort || !mPipe )
+    return false;  // this layer is not going to get rendered
 
+  // preview of intermediate raster rendering results requires a temporary output image
+  if ( renderContext()->testFlag( Qgis::RenderContextFlag::RenderPartialOutput ) )
+    return true;
+
+  if ( QgsRasterRenderer *renderer = mPipe->renderer() )
+  {
+    if ( !( renderer->flags() & Qgis::RasterRendererFlag::InternalLayerOpacityHandling )
+         && renderContext()->testFlag( Qgis::RenderContextFlag::UseAdvancedEffects ) && ( !qgsDoubleNear( mLayerOpacity, 1.0 ) ) )
+      return true;
+  }
+
+  return false;
+}

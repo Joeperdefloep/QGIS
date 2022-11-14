@@ -105,6 +105,8 @@ checkDock::~checkDock()
   // delete errors in list
   deleteErrors();
   delete mErrorListModel;
+
+  mTest->deleteLater();
 }
 
 void checkDock::clearVertexMarkers()
@@ -225,7 +227,7 @@ void checkDock::errorListClicked( const QModelIndex &index )
 
   fl.layer->getFeatures( QgsFeatureRequest().setFilterFid( fl.feature.id() ) ).nextFeature( f );
   g = f.geometry();
-  if ( g.isNull() )
+  if ( g.isNull() && mErrorList.at( row )->name() != QObject::tr( "gaps" ) )
   {
     QgsMessageLog::logMessage( tr( "Invalid first geometry" ), tr( "Topology plugin" ) );
     QMessageBox::information( this, tr( "Topology test" ), tr( "Feature not found in the layer.\nThe layer has probably changed.\nRun topology check again." ) );
@@ -258,7 +260,7 @@ void checkDock::errorListClicked( const QModelIndex &index )
 
   fl.layer->getFeatures( QgsFeatureRequest().setFilterFid( fl.feature.id() ) ).nextFeature( f );
   g = f.geometry();
-  if ( g.isNull() )
+  if ( g.isNull() && mErrorList.at( row )->name() != QObject::tr( "gaps" ) )
   {
     QgsMessageLog::logMessage( tr( "Invalid second geometry" ), tr( "Topology plugin" ) );
     QMessageBox::information( this, tr( "Topology test" ), tr( "Feature not found in the layer.\nThe layer has probably changed.\nRun topology check again." ) );
@@ -315,7 +317,7 @@ void checkDock::fix()
     mErrorList.removeAt( row );
     mErrorListModel->resetModel();
     //parseErrorListByFeature();
-    mComment->setText( tr( "%1 errors were found" ).arg( mErrorList.count() ) );
+    mComment->setText( tr( "%n error(s) were found", nullptr, mErrorList.count() ) );
     qgsInterface->mapCanvas()->refresh();
   }
   else
@@ -394,7 +396,7 @@ void checkDock::validate( ValidateType type )
   mRbErrorMarkers.clear();
 
   runTests( type );
-  mComment->setText( tr( "%1 errors were found" ).arg( mErrorList.count() ) );
+  mComment->setText( tr( "%n error(s) were found", nullptr, mErrorList.count() ) );
 
   mRBFeature1->reset();
   mRBFeature2->reset();

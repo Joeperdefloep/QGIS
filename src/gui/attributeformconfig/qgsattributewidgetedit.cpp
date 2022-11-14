@@ -30,6 +30,8 @@ QgsAttributeWidgetEdit::QgsAttributeWidgetEdit( QTreeWidgetItem *item, QWidget *
   // common configs
   mShowLabelCheckBox->setChecked( itemData.showLabel() );
 
+  mFormLabelFormatWidget->setLabelStyle( itemData.labelStyle() );
+
   switch ( itemData.type() )
   {
     case QgsAttributesFormProperties::DnDTreeItemData::Relation:
@@ -40,7 +42,7 @@ QgsAttributeWidgetEdit::QgsAttributeWidgetEdit( QTreeWidgetItem *item, QWidget *
       mSpecificEditWidget = editWidget;
       layout->addWidget( mSpecificEditWidget );
       mWidgetSpecificConfigGroupBox->setLayout( layout );
-      mWidgetSpecificConfigGroupBox->setTitle( editWidget->title() );
+      mWidgetSpecificConfigGroupBox->setTitle( QgsAttributeWidgetRelationEditWidget::title() );
 
     }
     break;
@@ -54,6 +56,7 @@ QgsAttributeWidgetEdit::QgsAttributeWidgetEdit( QTreeWidgetItem *item, QWidget *
       mWidgetSpecificConfigGroupBox->hide();
       break;
   }
+
 }
 
 void QgsAttributeWidgetEdit::updateItemData()
@@ -62,6 +65,7 @@ void QgsAttributeWidgetEdit::updateItemData()
 
   // common configs
   itemData.setShowLabel( mShowLabelCheckBox->isChecked() );
+  itemData.setLabelStyle( mFormLabelFormatWidget->labelStyle() );
 
   // specific configs
   switch ( itemData.type() )

@@ -17,7 +17,7 @@ set(CMAKE_LINK_DEPENDS_NO_SHARED ON)
 #############################################################
 # Project and version
 set(CPACK_PACKAGE_VERSION_MAJOR "3")
-set(CPACK_PACKAGE_VERSION_MINOR "23")
+set(CPACK_PACKAGE_VERSION_MINOR "29")
 set(CPACK_PACKAGE_VERSION_PATCH "0")
 set(COMPLETE_VERSION ${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH})
 set(RELEASE_NAME "Master")
@@ -119,9 +119,8 @@ set (WITH_CORE TRUE CACHE BOOL "Determines whether QGIS core should be built.")
 mark_as_advanced(WITH_CORE)
 
 if(WITH_CORE)
-  # Only GRASS 7 is currently supported but we keep dual version support in cmake for possible future switch to GRASS 8.
   # Try to configure and build GRASS plugin by default
-  foreach (GRASS_SEARCH_VERSION 7)
+  foreach (GRASS_SEARCH_VERSION 7 8)
     # Legacy note:
     # For GRASS 6 there were used cached variables without version suffix so that existing caches didn't have to be reconfigured.
     # Cached variables were: WITH_GRASS, WITH_GRASS7, GRASS_PREFIX, GRASS_PREFIX7, GRASS_INCLUDE_DIR, GRASS_INCLUDE_DIR7
@@ -149,11 +148,32 @@ if(WITH_CORE)
 
   set (WITH_DESKTOP TRUE CACHE BOOL "Determines whether QGIS desktop should be built")
 
+  if(WITH_DESKTOP)
+      if((WIN32 AND NOT MINGW) OR (UNIX AND NOT APPLE AND NOT ANDROID AND NOT IOS))
+	set (CRASH_HANDLER_AVAILABLE TRUE)
+      else()
+	set (CRASH_HANDLER_AVAILABLE FALSE)
+      endif()
+
+      set (WITH_CRASH_HANDLER ${CRASH_HANDLER_AVAILABLE} CACHE BOOL "Determines whether the QGIS crash handler application should be built")
+      if(WITH_CRASH_HANDLER AND NOT CRASH_HANDLER_AVAILABLE)
+	message(FATAL_ERROR "Crash handler cannot be built on this environment. Set WITH_CRASH_HANDLER to false.")
+      endif()
+      if(WITH_CRASH_HANDLER)
+	set (HAVE_CRASH_HANDLER TRUE)    # used in qgsconfig.h
+      else()
+	set (HAVE_CRASH_HANDLER FALSE)    # used in qgsconfig.h
+      endif()
+  endif()
+
   set (WITH_3D FALSE CACHE BOOL "Determines whether QGIS 3D library should be built")
 
   set (WITH_QUICK FALSE CACHE BOOL "Determines whether QGIS Quick library should be built")
 
   set (WITH_QGIS_PROCESS TRUE CACHE BOOL "Determines whether the standalone \"qgis_process\" tool should be built")
+
+  set (NATIVE_CRSSYNC_BIN "" CACHE PATH "Path to a natively compiled synccrsdb binary. If set, crssync will not build but use provided bin instead.")
+  mark_as_advanced (NATIVE_CRSSYNC_BIN)
 
   # try to configure and build python bindings by default
   set (WITH_BINDINGS TRUE CACHE BOOL "Determines whether python bindings should be built")
@@ -177,6 +197,8 @@ if(WITH_CORE)
   # server disabled default because it needs FastCGI (which is optional dependency)
   set (WITH_SERVER FALSE CACHE BOOL "Determines whether QGIS server should be built")
   if(WITH_SERVER)
+    set (WITH_SERVER_LANDINGPAGE_WEBAPP FALSE CACHE BOOL "Determines whether QGIS server landingpage webapp should be built (requires nodejs and yarn)")
+
     set (SERVER_SKIP_ECW FALSE CACHE BOOL "Determines whether QGIS server should disable ECW (ECW in server apps requires a special license)")
 
     set (WITH_SERVER_PLUGINS ${WITH_BINDINGS} CACHE BOOL "Determines whether QGIS server support for python plugins should be built")
@@ -261,14 +283,10 @@ if(WITH_CORE)
   endif(WITH_HANA)
 
   set (WITH_PDAL FALSE CACHE BOOL "Determines whether PDAL support should be built")
-  if(WITH_PDAL)
-    set(HAVE_PDAL TRUE)
-  endif()
 
   set (WITH_EPT TRUE CACHE BOOL "Determines whether Entwine Point Cloud (EPT) support should be built")
-  if(WITH_EPT)
-    set(HAVE_EPT TRUE)
-  endif()
+
+  set (WITH_COPC TRUE CACHE BOOL "Determines whether Cloud Optimized Point Cloud (COPC) support should be built")
 
   set (WITH_THREAD_LOCAL TRUE CACHE BOOL "Determines whether std::thread_local should be used")
   mark_as_advanced(WITH_THREAD_LOCAL)
@@ -393,39 +411,46 @@ if(WITH_CORE)
     message(STATUS "Qt WebKit support DISABLED.")
   endif()
 
-  if (WITH_EPT)  # EPT provider
-    find_package(ZSTD) # for decompression of point clouds
-    if (NOT ZSTD_FOUND)
-      message(FATAL_ERROR "ZSTD not found - EPT provider cannot be built")
+  set (WITH_INTERNAL_LAZPERF TRUE CACHE BOOL "Determines whether LazPerf should be built from internal copy")
+  if (WITH_EPT OR WITH_COPC)
+    if (NOT WITH_INTERNAL_LAZPERF)
+      find_package(LazPerf) # for decompression of point clouds
     endif()
-    find_package(LazPerf) # for decompression of point clouds
     if (NOT LazPerf_FOUND)
       message(STATUS "Using embedded laz-perf")
     endif()
+  endif()
+
+  if (WITH_EPT)  # EPT provider
+    find_package(ZSTD REQUIRED) # for decompression of point clouds
     set(HAVE_EPT TRUE)  # used in qgsconfig.h
+  endif()
+
+  if (WITH_COPC)  # COPC provider
+    set(HAVE_COPC TRUE)  # used in qgsconfig.h
   endif()
 
   if (WITH_PDAL)
     if (NOT WITH_EPT)
       message(FATAL_ERROR "PDAL provider cannot be built with EPT disabled")
     endif()
-    find_package(PDAL) # PDAL provider
-  endif()
-  if (PDAL_FOUND)
-    set(HAVE_PDAL TRUE)  # used in qgsconfig.h
+    find_package(PDAL REQUIRED) # PDAL provider
+    set(HAVE_PDAL_QGIS TRUE)  # used in qgisconfig.h. note -- we can't use HAVE_PDAL here as the grass public headers redefine this!
   endif()
 
   #############################################################
   # search for Qt
 
-  set (WITH_QT6 FALSE CACHE BOOL "Enable (broken, experimental) Qt6 support")
-  if (WITH_QT6)
+  set (BUILD_WITH_QT6 FALSE CACHE BOOL "Enable (broken, experimental) Qt6 support")
+  if (BUILD_WITH_QT6)
     set(QT_MIN_VERSION 6.0.0)
     set(QT_VERSION_BASE "Qt6")
   else()
-    set(QT_MIN_VERSION 5.12.0)
+    set(QT_MIN_VERSION 5.14.0)
     set(QT_VERSION_BASE "Qt5")
-    set(WITH_QT5_KDE_FORK FALSE CACHE BOOL "Using KDE's Qt 5.15 fork")
+    set(HAS_KDE_QT5_PDF_TRANSFORM_FIX FALSE CACHE BOOL "Using KDE's Qt 5.15 fork with the PDF brush transform fix")
+    set(HAS_KDE_QT5_SMALL_CAPS_FIX FALSE CACHE BOOL "Using KDE's Qt 5.15 fork with the QFont::SmallCaps fix")
+    set(HAS_KDE_QT5_FONT_STRETCH_FIX FALSE CACHE BOOL "Using KDE's Qt 5.15 fork with the QFont stretch fix")
   endif()
 
   # Use Qt5SerialPort optionally for GPS
@@ -436,28 +461,22 @@ if(WITH_CORE)
       set (HAVE_QT5SERIALPORT TRUE)
   endif()
 
-  find_package(${QT_VERSION_BASE} COMPONENTS Core Gui Widgets Network Xml Svg Concurrent Test UiTools Sql REQUIRED)
-  if (WITH_QT6)
+  find_package(${QT_VERSION_BASE} COMPONENTS Core Gui Widgets Network Xml Svg Concurrent Test Sql Positioning REQUIRED)
+  if (BUILD_WITH_QT6)
     find_package(${QT_VERSION_BASE} COMPONENTS Core5Compat REQUIRED)
-  else()
-    # TODO only available starting from Qt 6.2
-    find_package(${QT_VERSION_BASE} COMPONENTS Positioning)
   endif()
   if (NOT IOS)
     find_package(${QT_VERSION_BASE} COMPONENTS PrintSupport REQUIRED)
   else()
     add_definitions(-DQT_NO_PRINTER)
   endif()
-  if (WITH_QTWEBKIT AND NOT WITH_QT6)
+  if (WITH_QTWEBKIT AND NOT BUILD_WITH_QT6)
     find_package(Qt5WebKit REQUIRED)
     find_package(Qt5WebKitWidgets REQUIRED)
   endif()
   if (WITH_3D)
     find_package(${QT_VERSION_BASE} COMPONENTS 3DCore 3DRender 3DInput 3DLogic 3DExtras REQUIRED)
     set(HAVE_3D TRUE)  # used in qgsconfig.h
-  endif()
-  if (APPLE)
-    find_package(${QT_VERSION_BASE} COMPONENTS MacExtras REQUIRED)
   endif()
 
   # get the Qt plugins directory
@@ -466,14 +485,14 @@ if(WITH_CORE)
   EXEC_PROGRAM(${QMAKE_EXECUTABLE} ARGS "-query QT_INSTALL_PLUGINS" RETURN_VALUE return_code OUTPUT_VARIABLE DEFAULT_QT_PLUGINS_DIR )
   set (QT_PLUGINS_DIR ${DEFAULT_QT_PLUGINS_DIR} CACHE STRING "Path to installation directory for Qt Plugins. Defaults to Qt native plugin directory")
 
-  if (WITH_QT6)
+  if (BUILD_WITH_QT6)
     message(STATUS "Found Qt version: ${Qt6Core_VERSION}")
   else()
     message(STATUS "Found Qt version: ${Qt5Core_VERSION_STRING}")
   endif()
   if (WITH_QUICK)
     find_package(${QT_VERSION_BASE} COMPONENTS Qml Quick REQUIRED)
-    if(${CMAKE_SYSTEM_NAME} MATCHES "Android")
+    if(${CMAKE_SYSTEM_NAME} MATCHES "Android" AND NOT BUILD_WITH_QT6)
       find_package(${QT_VERSION_BASE} COMPONENTS AndroidExtras)
     endif()
 
@@ -550,6 +569,15 @@ if (ENABLE_TESTS)
   # For server side testing we have no X, we can use xvfb as a fake x
   # sudo apt-get install xvfb
   add_custom_target(check COMMAND xvfb-run --server-args=-screen\ 0\ 1024x768x24 ctest --output-on-failure)
+
+  # Define SOURCETREE fixture
+  add_test(NAME   logGitStatus COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/scripts/chkgitstatus.sh log)
+  add_test(NAME checkGitStatus COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/scripts/chkgitstatus.sh check)
+  set_tests_properties(logGitStatus   PROPERTIES FIXTURES_SETUP   SOURCETREE)
+  set_property(TEST logGitStatus PROPERTY SKIP_RETURN_CODE 2)
+  set_tests_properties(checkGitStatus PROPERTIES FIXTURES_CLEANUP SOURCETREE)
+  set_property(TEST checkGitStatus PROPERTY SKIP_RETURN_CODE 2)
+
 endif()
 
 if (WITH_CORE)
@@ -608,6 +636,9 @@ if (PEDANTIC)
 
     # unavoidable - we can't avoid these, as older, supported compilers do not support removing the redundant move
     set(_warnings "${_warnings} -Wno-redundant-move")
+
+    # disable misleading-indentation warning -- it's slow to parse the sip files and not needed since we have the automated code styling rules
+    set(_warnings "${_warnings} -Wno-misleading-indentation")
 
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 7.9.999)
       # heaps of these thrown by Qt headers at the moment (sep 2019)
@@ -692,6 +723,10 @@ if(ENABLE_COVERAGE)
   set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} -g -O0 -fprofile-arcs -ftest-coverage --coverage")
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -g -O0 -fprofile-arcs -ftest-coverage --coverage")
   SETUP_TARGET_FOR_COVERAGE(qgis_coverage ctest coverage)
+endif()
+
+if(USE_ALTERNATE_LINKER)
+  include("cmake/modules/linker.cmake")
 endif()
 
 #############################################################
@@ -814,7 +849,6 @@ if (WITH_CORE)
 
   if (ANDROID)
     set (DEFAULT_PLUGIN_SUBDIR  lib)
-    set (DEFAULT_DATA_SUBDIR    files/share)
     string(REPLACE "<CMAKE_SHARED_LIBRARY_SONAME_CXX_FLAG><TARGET_SONAME>" "" CMAKE_CXX_CREATE_SHARED_MODULE "${CMAKE_CXX_CREATE_SHARED_MODULE}")
   endif()
 
@@ -841,12 +875,21 @@ if (WITH_CORE)
   set(CMAKE_CXX_VISIBILITY_PRESET hidden)
   include(GenerateExportHeader)
 
-  set (ADD_CLAZY_CHECKS ${DEFAULT_MANUAL_SUBDIR} CACHE STRING "Add default set of clazy checks which should not raise any warnings")
-  mark_as_advanced (ADD_CLAZY_CHECKS)
-  if (ADD_CLAZY_CHECKS)
-  set(CMAKE_CXX_BASE_FLAGS "${CMAKE_CXX_FLAGS}")
-  set(CLAZY_BASE_CHECKS "connect-3arg-lambda,lambda-unique-connection,empty-qstringliteral,fully-qualified-moc-types,lambda-in-connect,lowercase-qml-type-name,qcolor-from-literal,qfileinfo-exists,qmap-with-pointer-key,unused-non-trivial-variable,overridden-signal,qdeleteall,qstring-left,skipped-base-method,missing-qobject-macro,isempty-vs-count")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_BASE_FLAGS} -Xclang -plugin-arg-clazy -Xclang ${CLAZY_BASE_CHECKS}")
+  set (WITH_CLAZY FALSE CACHE BOOL "Determines whether Clazy checks should be enabled")
+  mark_as_advanced (WITH_CLAZY)
+  if (WITH_CLAZY)
+    set(CMAKE_CXX_BASE_FLAGS "${CMAKE_CXX_FLAGS}")
+    #  qcolor-from-literal crashes clang with clazy 1.11
+    set(CLAZY_BASE_CHECKS "connect-3arg-lambda,lambda-unique-connection,empty-qstringliteral,fully-qualified-moc-types,lowercase-qml-type-name,qfileinfo-exists,qmap-with-pointer-key,unused-non-trivial-variable,overridden-signal,qdeleteall,qstring-left,skipped-base-method,isempty-vs-count,missing-qobject-macro,container-anti-pattern")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_BASE_FLAGS} -Xclang -plugin-arg-clazy -Xclang ${CLAZY_BASE_CHECKS}")
+
+    if (WERROR AND NOT ${QGISDEBUG})
+      message(FATAL_ERROR "Don't activate both WERROR and ADD_CLAZY_CHECKS in Release mode, you will get many false positive errors")
+    endif()
+
+    if (WERROR AND ("$ENV{CLAZY_IGNORE_DIRS}" STREQUAL ""))
+      message(WARNING "WERROR and ADD_CLAZY_CHECKS are activated. To avoid unwanted Clazy error, please set the CLAZY_IGNORE_DIRS environment variable like this : \nexport CLAZY_IGNORE_DIRS=\"(.*/external/.*)|(.*sip_.*part.*)\"")
+    endif()
   endif()
 endif()
 
@@ -925,7 +968,7 @@ message("-- Found Python executable: ${Python_EXECUTABLE} (version ${Python_VERS
 message("-- Python library: ${Python_LIBRARIES}")
 message("-- Python site-packages: ${Python_SITEARCH}")
 
-if (WITH_CORE AND WITH_BINDINGS AND NOT WITH_QT6)
+if (WITH_CORE AND WITH_BINDINGS AND NOT BUILD_WITH_QT6)
   set(PYTHON_OUTPUT_DIRECTORY ${QGIS_OUTPUT_DIRECTORY}/python)
   set (QGIS_PYTHON_OUTPUT_DIRECTORY ${PYTHON_OUTPUT_DIRECTORY}/qgis)
 
@@ -942,7 +985,7 @@ if (WITH_CORE AND WITH_BINDINGS AND NOT WITH_QT6)
   include(SIPMacros)
 
   set(SIP_INCLUDES ${PYQT_SIP_DIR} ${CMAKE_SOURCE_DIR}/python)
-  set(SIP_CONCAT_PARTS 16)
+  set(SIP_CONCAT_PARTS 20)
 
   if (NOT BINDINGS_GLOBAL_INSTALL)
     set(Python_SITEARCH ${QGIS_DATA_DIR}/python)
@@ -973,23 +1016,13 @@ if (WITH_CORE)
 endif()
 
 ####################################################
-# clang-tidy
-set (WITH_CLANG_TIDY FALSE CACHE BOOL "Use Clang tidy")
-mark_as_advanced(WITH_CLANG_TIDY)
-if (WITH_CORE)
-  if(WITH_CLANG_TIDY)
-    find_program(
-      CLANG_TIDY_EXE
-      NAMES "clang-tidy"
-      DOC "Path to clang-tidy executable"
-      )
-    if(NOT CLANG_TIDY_EXE)
-      message(STATUS "clang-tidy not found.")
-    else()
-      message(STATUS "clang-tidy found: ${CLANG_TIDY_EXE}")
-      set(DO_CLANG_TIDY "${CLANG_TIDY_EXE}" "-checks=*,-clang-analyzer-alpha.*,-cppcoreguidelines*,-readability-implicit-bool-cast,-llvm-include-order,-cert-err58-cpp,-modernize-pass-by-value,-google-readability-braces-around-statements,-modernize-use-auto,-modernize-loop-convert,-readability-else-after-return,-readability-braces-around-statements,-google-runtime-references,-readability-named-parameter,-google-default-arguments,-google-readability-todo,-readability-inconsistent-declaration-parameter-name,-cert-flp30-c,-google-readability-casting,-clang-analyzer-security.FloatLoopCounter,-google-runtime-int,-modernize-use-using,-google-explicit-constructor,-google-build-using-namespace,-cert-err34-c,-clang-analyzer-core.CallAndMessage,-google-readability-function-size,-modernize-make-shared,-modernize-use-nullptr,-clang-analyzer-cplusplus.NewDeleteLeaks,-clang-analyzer-core.NonNullParamChecker,performance-unnecessary-copy-initialization,-readability-simplify-boolean-expr,-modernize-raw-string-literal,-performance-unnecessary-copy-initialization")
-    endif()
-  endif()
+# asan
+set (WITH_ASAN FALSE CACHE BOOL "Use AddressSanitizer")
+mark_as_advanced(WITH_ASAN)
+if(WITH_ASAN)
+  message(STATUS "Enabling AddressSanitizer")
+  add_compile_options(-fsanitize=address)
+  add_link_options(-fsanitize=address)
 endif()
 
 #############################################################

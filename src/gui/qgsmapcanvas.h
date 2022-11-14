@@ -26,10 +26,10 @@
 #include "qgsfeatureid.h"
 #include "qgsgeometry.h"
 #include "qgscustomdrophandler.h"
-#include "qgstemporalrangeobject.h"
 #include "qgsmapcanvasinteractionblocker.h"
 #include "qgsproject.h"
 #include "qgsdistancearea.h"
+#include "qgsmaprendererjob.h"
 
 #include <QDomDocument>
 #include <QGraphicsView>
@@ -72,8 +72,10 @@ class QgsRubberBand;
 class QgsMapCanvasAnnotationItem;
 class QgsReferencedRectangle;
 class QgsRenderedItemResults;
+class QgsTemporaryCursorOverride;
 
 class QgsTemporalController;
+class QgsScreenHelper;
 
 class QMenu;
 class QgsMapMouseEvent;
@@ -364,8 +366,8 @@ class GUI_EXPORT QgsMapCanvas : public QGraphicsView, public QgsExpressionContex
      */
     void panToFeatureIds( QgsVectorLayer *layer, const QgsFeatureIds &ids, bool alwaysRecenter = true );
 
-    //! Pan to the selected features of current (vector) layer keeping same extent.
-    void panToSelected( QgsVectorLayer *layer = nullptr );
+    //! Pan to the selected features of current ayer keeping same extent.
+    void panToSelected( QgsMapLayer *layer = nullptr );
 
     /**
      * Pan to the combined extent of the selected features of all provided (vector) layers.
@@ -471,14 +473,20 @@ class GUI_EXPORT QgsMapCanvas : public QGraphicsView, public QgsExpressionContex
      */
     QgsMapLayer *layer( const QString &id );
 
-    //! Returns number of layers on the map
+    /**
+     * Returns number of layers on the map.
+     */
     int layerCount() const;
 
     /**
      * Returns the list of layers shown within the map canvas.
+     *
+     * Since QGIS 3.24, if the \a expandGroupLayers option is TRUE then group layers will be converted to
+     * all their child layers.
+     *
      * \see setLayers()
      */
-    QList<QgsMapLayer *> layers() const;
+    QList<QgsMapLayer *> layers( bool expandGroupLayers = false ) const;
 
     /**
      * Freeze/thaw the map canvas. This is used to prevent the canvas from
@@ -938,10 +946,10 @@ class GUI_EXPORT QgsMapCanvas : public QGraphicsView, public QgsExpressionContex
     void zoomOut();
 
     /**
-     * Zoom to the extent of the selected features of provided (vector) layer.
+     * Zoom to the extent of the selected features of provided map layer.
      * \param layer optionally specify different than current layer
      */
-    void zoomToSelected( QgsVectorLayer *layer = nullptr );
+    void zoomToSelected( QgsMapLayer *layer = nullptr );
 
     /**
      * Zoom to the combined extent of the selected features of all provided (vector) layers.
@@ -1098,9 +1106,12 @@ class GUI_EXPORT QgsMapCanvas : public QGraphicsView, public QgsExpressionContex
      */
     void mapToolSet( QgsMapTool *newTool, QgsMapTool *oldTool );
 
-
-    //! Emitted when selection in any layer gets changed
-    void selectionChanged( QgsVectorLayer *layer );
+    /**
+     * Emitted when selection in any \a layer gets changed.
+     *
+     * \note Since QGIS 3.28 this signal is emitted for multiple layer types, including QgsVectorLayer and QgsVectorTileLayer
+     */
+    void selectionChanged( QgsMapLayer *layer );
 
     //! Emitted when zoom last status changed
     void zoomLastStatusChanged( bool );
@@ -1247,6 +1258,8 @@ class GUI_EXPORT QgsMapCanvas : public QGraphicsView, public QgsExpressionContex
 
     void startPreviewJob( int number );
 
+    void temporalControllerModeChanged();
+
   private:
 
     // Restore scale RAII
@@ -1276,6 +1289,8 @@ class GUI_EXPORT QgsMapCanvas : public QGraphicsView, public QgsExpressionContex
 
     //! owns pixmap with rendered map and controls rendering
     QgsMapCanvasMap *mMap = nullptr;
+
+    QgsScreenHelper *mScreenHelper = nullptr;
 
     /**
      * Temporal controller for tracking update of temporal objects
@@ -1411,7 +1426,16 @@ class GUI_EXPORT QgsMapCanvas : public QGraphicsView, public QgsExpressionContex
 
     int mBlockItemPositionUpdates = 0;
 
-    QMetaObject::Connection mScreenDpiChangedConnection;
+    std::unique_ptr< QgsTemporaryCursorOverride > mTemporaryCursorOverride;
+
+    /**
+     * This attribute maps error strings occurred during rendering with time.
+     * The string contains the layerId with the error message ("layerId:error").
+     * This is used to avoid propagatation of repeated error message from renderer
+     * in a short time range (\see notifyRendererErrors())
+     *
+     */
+    QMap <QString, QDateTime> mRendererErrors;
 
     /**
      * Returns the last cursor position on the canvas in geographical coordinates
@@ -1438,6 +1462,15 @@ class GUI_EXPORT QgsMapCanvas : public QGraphicsView, public QgsExpressionContex
      * \since QGIS 2.16
      */
     void endZoomRect( QPoint pos );
+
+    //! Stop/cancel zooming via rectangle
+    void stopZoomRect();
+
+    //! Start map pan
+    void startPan();
+
+    //! Stop map pan
+    void stopPan();
 
     /**
      * Returns bounding box of feature list (in canvas coordinates)
@@ -1482,6 +1515,12 @@ class GUI_EXPORT QgsMapCanvas : public QGraphicsView, public QgsExpressionContex
     void clearElevationCache();
 
     void showContextMenu( QgsMapMouseEvent *event );
+
+    /**
+     * This private method is used to emit rendering error from map layer without throwing it for every render.
+     * It contains a mechanism that does not emit the error if the same error from the same layer was emitted less than 1 mn ago.
+     */
+    void notifyRendererErrors( const QgsMapRendererJob::Errors &errors );
 
     friend class TestQgsMapCanvas;
 

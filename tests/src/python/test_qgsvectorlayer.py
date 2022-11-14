@@ -18,8 +18,19 @@ import qgis  # NOQA
 import os
 import tempfile
 import shutil
+import glob
 
-from qgis.PyQt.QtCore import QDate, QDateTime, QVariant, Qt, QDateTime, QDate, QTime
+from qgis.PyQt.QtCore import (
+    QDate,
+    QDateTime,
+    QVariant,
+    Qt,
+    QDateTime,
+    QDate,
+    QTime,
+    QTimer,
+    QTemporaryDir,
+)
 from qgis.PyQt.QtGui import QPainter, QColor
 from qgis.PyQt.QtXml import QDomDocument
 
@@ -67,6 +78,11 @@ from qgis.core import (Qgis,
                        QgsVectorLayerSelectedFeatureSource,
                        QgsExpression,
                        QgsLayerMetadata,
+                       QgsAnimatedMarkerSymbolLayer,
+                       QgsMarkerSymbol,
+                       QgsSingleSymbolRenderer,
+                       QgsEmbeddedSymbolRenderer,
+                       QgsNullSymbolRenderer,
                        NULL)
 from qgis.gui import (QgsAttributeTableModel,
                       QgsGui
@@ -1781,8 +1797,19 @@ class TestQgsVectorLayer(unittest.TestCase, FeatureSourceTestCase):
         new_value = 33.0
 
         # read project and get layers
+        tmp_dir = QTemporaryDir()
+        tmp_path = tmp_dir.path()
+
         myPath = os.path.join(unitTestDataPath(), 'joins.qgs')
-        rc = QgsProject.instance().read(myPath)
+        shutil.copy2(myPath, tmp_path)
+
+        for file in glob.glob(os.path.join(unitTestDataPath(), 'polys_overlapping_with_id.*')):
+            shutil.copy(file, tmp_path)
+
+        for file in glob.glob(os.path.join(unitTestDataPath(), 'polys_with_id.*')):
+            shutil.copy(file, tmp_path)
+
+        rc = QgsProject.instance().read(os.path.join(tmp_path, 'joins.qgs'))
 
         layer = QgsProject.instance().mapLayersByName("polys_with_id")[0]
         join_layer = QgsProject.instance().mapLayersByName("polys_overlapping_with_id")[0]
@@ -2287,6 +2314,20 @@ class TestQgsVectorLayer(unittest.TestCase, FeatureSourceTestCase):
         self.assertEqual(set(layer.selectedFeatureIds()), set([3]))
         layer.selectByExpression('"Heading"=95', QgsVectorLayer.RemoveFromSelection)
         self.assertEqual(set(layer.selectedFeatureIds()), set([]))
+
+        # test using specific expression context
+        layer.selectByExpression('"Class"=@class and "Heading" > @low_heading and "Heading" <@high_heading', QgsVectorLayer.SetSelection)
+        # default built context won't have variables used in the expression
+        self.assertFalse(layer.selectedFeatureIds())
+
+        context = QgsExpressionContext(QgsExpressionContextUtils.globalProjectLayerScopes(layer))
+        context.lastScope().setVariable('class', 'B52')
+        context.lastScope().setVariable('low_heading', 10)
+        context.lastScope().setVariable('high_heading', 70)
+        # using custom context should allow the expression to be evaluated correctly
+        layer.selectByExpression('"Class"=@class and "Heading" > @low_heading and "Heading" <@high_heading',
+                                 QgsVectorLayer.SetSelection, context)
+        self.assertCountEqual(layer.selectedFeatureIds(), [10, 11])
 
     def testSelectByRect(self):
         """ Test selecting by rectangle """
@@ -3468,6 +3509,126 @@ class TestQgsVectorLayerSourceChangedAttributesInBuffer(unittest.TestCase, Featu
         pass
 
 
+class TestQgsVectorLayerSourceChangedGeometriesAndAttributesInBuffer(unittest.TestCase, FeatureSourceTestCase):
+
+    @classmethod
+    def getSource(cls):
+        vl = QgsVectorLayer(
+            'Point?crs=epsg:4326&field=pk:integer&field=cnt:integer&field=name:string(0)&field=name2:string(0)&field=num_char:string&field=dt:datetime&field=date:date&field=time:time&key=pk',
+            'test', 'memory')
+        assert (vl.isValid())
+
+        f1 = QgsFeature()
+        f1.setAttributes([5, 200, 'a', 'b', 'c', QDateTime(2020, 4, 5, 1, 2, 3), QDate(2020, 4, 5), QTime(1, 2, 3)])
+
+        f2 = QgsFeature()
+        f2.setAttributes([3, -200, 'd', 'e', 'f', QDateTime(2020, 4, 5, 1, 2, 3), QDate(2020, 4, 5), QTime(1, 2, 3)])
+        f2.setGeometry(QgsGeometry.fromWkt('Point (-70.5 65.2)'))
+
+        f3 = QgsFeature()
+        f3.setAttributes([1, -100, 'g', 'h', 'i', QDateTime(2020, 4, 5, 1, 2, 3), QDate(2020, 4, 5), QTime(1, 2, 3)])
+
+        f4 = QgsFeature()
+        f4.setAttributes([2, -200, 'j', 'k', 'l', QDateTime(2020, 4, 5, 1, 2, 3), QDate(2020, 4, 5), QTime(1, 2, 3)])
+
+        f5 = QgsFeature()
+        f5.setAttributes([4, 400, 'm', 'n', 'o', QDateTime(2020, 4, 5, 1, 2, 3), QDate(2020, 4, 5), QTime(1, 2, 3)])
+
+        vl.dataProvider().addFeatures([f1, f2, f3, f4, f5])
+
+        ids = {f['pk']: f.id() for f in vl.getFeatures()}
+
+        # modify geometries in buffer
+        vl.startEditing()
+        vl.changeGeometry(ids[5], QgsGeometry.fromWkt('Point (-71.123 78.23)'))
+        vl.changeGeometry(ids[3], QgsGeometry())
+        vl.changeGeometry(ids[1], QgsGeometry.fromWkt('Point (-70.332 66.33)'))
+        vl.changeGeometry(ids[2], QgsGeometry.fromWkt('Point (-68.2 70.8)'))
+        vl.changeGeometry(ids[4], QgsGeometry.fromWkt('Point (-65.32 78.3)'))
+
+        # modify attributes in buffer
+        vl.changeAttributeValue(ids[5], 1, -200)
+        vl.changeAttributeValue(ids[5], 2, NULL)
+        vl.changeAttributeValue(ids[5], 3, 'NuLl')
+        vl.changeAttributeValue(ids[5], 4, '5')
+        vl.changeAttributeValue(ids[5], 5, QDateTime(QDate(2020, 5, 4), QTime(12, 13, 14)))
+        vl.changeAttributeValue(ids[5], 6, QDate(2020, 5, 2))
+        vl.changeAttributeValue(ids[5], 7, QTime(12, 13, 1))
+
+        vl.changeAttributeValue(ids[3], 1, 300)
+        vl.changeAttributeValue(ids[3], 2, 'Pear')
+        vl.changeAttributeValue(ids[3], 3, 'PEaR')
+        vl.changeAttributeValue(ids[3], 4, '3')
+        vl.changeAttributeValue(ids[3], 5, NULL)
+        vl.changeAttributeValue(ids[3], 6, NULL)
+        vl.changeAttributeValue(ids[3], 7, NULL)
+
+        vl.changeAttributeValue(ids[1], 1, 100)
+        vl.changeAttributeValue(ids[1], 2, 'Orange')
+        vl.changeAttributeValue(ids[1], 3, 'oranGe')
+        vl.changeAttributeValue(ids[1], 4, '1')
+        vl.changeAttributeValue(ids[1], 5, QDateTime(QDate(2020, 5, 3), QTime(12, 13, 14)))
+        vl.changeAttributeValue(ids[1], 6, QDate(2020, 5, 3))
+        vl.changeAttributeValue(ids[1], 7, QTime(12, 13, 14))
+
+        vl.changeAttributeValue(ids[2], 1, 200)
+        vl.changeAttributeValue(ids[2], 2, 'Apple')
+        vl.changeAttributeValue(ids[2], 3, 'Apple')
+        vl.changeAttributeValue(ids[2], 4, '2')
+        vl.changeAttributeValue(ids[2], 5, QDateTime(QDate(2020, 5, 4), QTime(12, 14, 14)))
+        vl.changeAttributeValue(ids[2], 6, QDate(2020, 5, 4))
+        vl.changeAttributeValue(ids[2], 7, QTime(12, 14, 14))
+
+        vl.changeAttributeValue(ids[4], 1, 400)
+        vl.changeAttributeValue(ids[4], 2, 'Honey')
+        vl.changeAttributeValue(ids[4], 3, 'Honey')
+        vl.changeAttributeValue(ids[4], 4, '4')
+        vl.changeAttributeValue(ids[4], 5, QDateTime(QDate(2021, 5, 4), QTime(13, 13, 14)))
+        vl.changeAttributeValue(ids[4], 6, QDate(2021, 5, 4))
+        vl.changeAttributeValue(ids[4], 7, QTime(13, 13, 14))
+
+        return vl
+
+    @classmethod
+    def setUpClass(cls):
+        """Run before all tests"""
+        # Create test layer for FeatureSourceTestCase
+        cls.source = cls.getSource()
+
+    def testGetFeaturesSubsetAttributes2(self):
+        """ Override and skip this QgsFeatureSource test. We are using a memory provider, and it's actually more efficient for the memory provider to return
+        its features as direct copies (due to implicit sharing of QgsFeature)
+        """
+        pass
+
+    def testGetFeaturesNoGeometry(self):
+        """ Override and skip this QgsFeatureSource test. We are using a memory provider, and it's actually more efficient for the memory provider to return
+        its features as direct copies (due to implicit sharing of QgsFeature)
+        """
+        pass
+
+    def testOrderBy(self):
+        """ Skip order by tests - edited features are not sorted in iterators.
+        (Maybe they should be??)
+        """
+        pass
+
+    def testUniqueValues(self):
+        """ Skip unique values test - as noted in the docs this is unreliable when features are in the buffer
+        """
+        pass
+
+    def testMinimumValue(self):
+        """ Skip min values test - as noted in the docs this is unreliable when features are in the buffer
+        """
+        pass
+
+    def testMaximumValue(self):
+        """ Skip max values test - as noted in the docs this is unreliable when features are in the buffer
+        """
+        pass
+
+
 class TestQgsVectorLayerSourceDeletedFeaturesInBuffer(unittest.TestCase, FeatureSourceTestCase):
 
     @classmethod
@@ -3715,6 +3876,106 @@ class TestQgsVectorLayerTransformContext(unittest.TestCase):
 
         layer = QgsVectorLayer("point?crs=epsg:4326&field=name:string", "Scratch point layer", "memory")
         self.assertEqual(layer.vectorLayerTypeFlags(), Qgis.VectorLayerTypeFlags())
+
+    def test_renderer_with_animated_symbol(self):
+        """
+        Test that setting a renderer with an animated symbol leads to redraw signals on the correct interval
+        """
+        layer = QgsVectorLayer("point?crs=epsg:4326&field=name:string", "Scratch point layer", "memory")
+
+        # renderer with an animated symbol
+        marker_symbol = QgsMarkerSymbol()
+        animated_marker = QgsAnimatedMarkerSymbolLayer()
+        animated_marker.setFrameRate(30)
+        marker_symbol.appendSymbolLayer(animated_marker)
+        renderer = QgsSingleSymbolRenderer(marker_symbol)
+        layer.setRenderer(renderer)
+
+        spy = QSignalSpy(layer.repaintRequested)
+        timer = QTimer()
+        timer.setSingleShot(True)
+        timer.setInterval(500)
+        spy2 = QSignalSpy(timer.timeout)
+        spy2.wait()
+
+        # expect 15 repaint requests in a 0.5 seconds, but add a lot of tolerance for a stable test!
+        # (it may have been much longer than 0.5 seconds here!)
+        self.assertGreaterEqual(len(spy), 14)
+        self.assertLessEqual(len(spy), 300)
+
+        # not an animated symbol
+        marker_symbol = QgsMarkerSymbol()
+        renderer = QgsSingleSymbolRenderer(marker_symbol)
+        layer.setRenderer(renderer)
+
+        spy = QSignalSpy(layer.repaintRequested)
+        timer = QTimer()
+        timer.setSingleShot(True)
+        timer.setInterval(500)
+        spy2 = QSignalSpy(timer.timeout)
+        spy2.wait()
+
+        # should not be any repaint requests now
+        self.assertEqual(len(spy), 0)
+
+    def testQmlDefaultTakesPrecedenceOverProviderDefaultRenderer(self):
+        """
+        Test that a user created QML default style takes precedence over a default style
+        created by a provider
+        """
+
+        with tempfile.TemporaryDirectory() as temp:
+            shutil.copy(TEST_DATA_DIR + '/mapinfo/fill_styles.DAT', temp + '/fill_styles.DAT')
+            shutil.copy(TEST_DATA_DIR + '/mapinfo/fill_styles.ID', temp + '/fill_styles.ID')
+            shutil.copy(TEST_DATA_DIR + '/mapinfo/fill_styles.MAP', temp + '/fill_styles.MAP')
+            shutil.copy(TEST_DATA_DIR + '/mapinfo/fill_styles.TAB', temp + '/fill_styles.TAB')
+
+            layer = QgsVectorLayer(temp + '/fill_styles.TAB', 'test', 'ogr')
+            self.assertTrue(layer.isValid())
+            # should take a default embedded renderer from provider
+            self.assertIsInstance(layer.renderer(), QgsEmbeddedSymbolRenderer)
+
+            from qgis.core import QgsFillSymbol
+            symbol = QgsFillSymbol.createSimple({'color': '#ff00ff'})
+            layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+
+            message, ok = layer.saveDefaultStyle()
+            self.assertTrue(ok)
+
+            del layer
+            layer = QgsVectorLayer(temp + '/fill_styles.TAB', 'test', 'ogr')
+            self.assertTrue(layer.isValid())
+            # now we should load the .qml default style instead of the provider default
+            self.assertIsInstance(layer.renderer(), QgsSingleSymbolRenderer)
+            self.assertEqual(layer.renderer().symbol().color().name(), '#ff00ff')
+
+            # remove qml default
+            os.remove(temp + '/fill_styles.qml')
+            del layer
+            layer = QgsVectorLayer(temp + '/fill_styles.TAB', 'test', 'ogr')
+            self.assertTrue(layer.isValid())
+
+            # should return to a default embedded renderer from provider
+            self.assertIsInstance(layer.renderer(), QgsEmbeddedSymbolRenderer)
+
+    def testSldTextSymbolizerExport(self):
+        """Test issue GH #35561"""
+
+        vl = QgsVectorLayer('Point?crs=epsg:4326&field=name:string(0)', 'test', 'memory')
+
+        text_format = QgsTextFormat()
+        text_format.setSizeUnit(QgsUnitTypes.RenderUnit.RenderPoints)
+        text_format.setSize(10)
+        settings = QgsPalLayerSettings()
+        settings.setFormat(text_format)
+        settings.fieldName = "'name'"
+        labeling = QgsVectorLayerSimpleLabeling(settings)
+        vl.setLabeling(labeling)
+        vl.setLabelsEnabled(True)
+        vl.setRenderer(QgsNullSymbolRenderer())
+        doc = QDomDocument()
+        vl.exportSldStyle(doc, None)
+        self.assertIn('name="font-size">13', doc.toString())
 
     def testLayerWithoutProvider(self):
         """Test that we don't crash when invoking methods on a layer with a broken provider"""

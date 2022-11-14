@@ -27,6 +27,7 @@
 
 #include <QFileInfo>
 #include <QRegularExpression>
+#include <QIcon>
 #include <mutex>
 
 const QString QgsMdalProvider::MDAL_PROVIDER_KEY = QStringLiteral( "mdal" );
@@ -1079,7 +1080,7 @@ QVariantMap QgsMdalProviderMetadata::decodeUri( const QString &uri ) const
 {
   QVariantMap uriComponents;
 
-  const QRegularExpression layerRegex( QStringLiteral( "^([a-zA-Z0-9_]+?):\"(.*)\"(?::([a-zA-Z0-9_]+?$)|($))" ) );
+  const QRegularExpression layerRegex( QStringLiteral( "^([a-zA-Z0-9_]+?):\"(.*)\"(?::([a-zA-Z0-9_ ]+?$)|($))" ) );
   const QRegularExpressionMatch layerNameMatch = layerRegex.match( uri );
   if ( layerNameMatch.hasMatch() )
   {
@@ -1215,6 +1216,11 @@ QList<QgsProviderSublayerDetails> QgsMdalProviderMetadata::querySublayers( const
   return res;
 }
 
+QList<QgsMapLayerType> QgsMdalProviderMetadata::supportedLayerTypes() const
+{
+  return { QgsMapLayerType::MeshLayer };
+}
+
 QString QgsMdalProviderMetadata::filters( FilterType type )
 {
   switch ( type )
@@ -1285,6 +1291,11 @@ QList<QgsMeshDriverMetadata> QgsMdalProviderMetadata::meshDriversMetadata()
 QgsMdalProviderMetadata::QgsMdalProviderMetadata()
   : QgsProviderMetadata( QgsMdalProvider::MDAL_PROVIDER_KEY, QgsMdalProvider::MDAL_PROVIDER_DESCRIPTION )
 {}
+
+QIcon QgsMdalProviderMetadata::icon() const
+{
+  return QgsApplication::getThemeIcon( QStringLiteral( "mIconMeshLayer.svg" ) );
+}
 
 QGISEXTERN QgsProviderMetadata *providerMetadataFactory()
 {

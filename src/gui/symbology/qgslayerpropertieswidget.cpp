@@ -47,6 +47,7 @@
 #include "qgsmarkersymbol.h"
 #include "qgslinesymbol.h"
 #include "qgsfillsymbol.h"
+#include "qgsmarkersymbollayer.h"
 
 static bool _initWidgetFunction( const QString &name, QgsSymbolLayerWidgetFunc f )
 {
@@ -86,6 +87,7 @@ static void _initWidgetFunctions()
   _initWidgetFunction( QStringLiteral( "FilledMarker" ), QgsFilledMarkerSymbolLayerWidget::create );
   _initWidgetFunction( QStringLiteral( "SvgMarker" ), QgsSvgMarkerSymbolLayerWidget::create );
   _initWidgetFunction( QStringLiteral( "RasterMarker" ), QgsRasterMarkerSymbolLayerWidget::create );
+  _initWidgetFunction( QStringLiteral( "AnimatedMarker" ), QgsAnimatedMarkerSymbolLayerWidget::create );
   _initWidgetFunction( QStringLiteral( "FontMarker" ), QgsFontMarkerSymbolLayerWidget::create );
   _initWidgetFunction( QStringLiteral( "EllipseMarker" ), QgsEllipseSymbolLayerWidget::create );
   _initWidgetFunction( QStringLiteral( "VectorField" ), QgsVectorFieldSymbolLayerWidget::create );
@@ -279,6 +281,7 @@ QgsExpressionContext QgsLayerPropertiesWidget::createExpressionContext() const
   expContext.lastScope()->addVariable( QgsExpressionContextScope::StaticVariable( QStringLiteral( "symbol_layer_index" ), 1, true ) );
   expContext.lastScope()->addVariable( QgsExpressionContextScope::StaticVariable( QStringLiteral( "symbol_marker_row" ), 1, true ) );
   expContext.lastScope()->addVariable( QgsExpressionContextScope::StaticVariable( QStringLiteral( "symbol_marker_column" ), 1, true ) );
+  expContext.lastScope()->addVariable( QgsExpressionContextScope::StaticVariable( QStringLiteral( "symbol_frame" ), 1, true ) );
 
   // additional scopes
   const auto constAdditionalExpressionContextScopes = mContext.additionalExpressionContextScopes();
@@ -295,7 +298,8 @@ QgsExpressionContext QgsLayerPropertiesWidget::createExpressionContext() const
                                       << QgsExpressionContext::EXPR_GEOMETRY_RING_NUM
                                       << QgsExpressionContext::EXPR_GEOMETRY_POINT_COUNT << QgsExpressionContext::EXPR_GEOMETRY_POINT_NUM
                                       << QgsExpressionContext::EXPR_CLUSTER_COLOR << QgsExpressionContext::EXPR_CLUSTER_SIZE
-                                      << QStringLiteral( "symbol_layer_count" ) << QStringLiteral( "symbol_layer_index" ) );
+                                      << QStringLiteral( "symbol_layer_count" ) << QStringLiteral( "symbol_layer_index" )
+                                      << QStringLiteral( "symbol_frame" ) );
 
   return expContext;
 }
@@ -386,6 +390,48 @@ void QgsLayerPropertiesWidget::layerTypeChanged()
     if ( newLayer->subSymbol() && layer->subSymbol() && newLayer->subSymbol()->type() == layer->subSymbol()->type() )
     {
       newLayer->setSubSymbol( layer->subSymbol()->clone() );
+    }
+  }
+
+  // special logic for when NEW symbol layers are created from GUI only...
+  // TODO: find a nicer generic way to handle this!
+  if ( QgsFontMarkerSymbolLayer *fontMarker = dynamic_cast< QgsFontMarkerSymbolLayer * >( newLayer ) )
+  {
+    const QString defaultFont = fontMarker->fontFamily();
+    const QFontDatabase fontDb;
+    if ( !fontDb.hasFamily( defaultFont ) )
+    {
+      // default font marker font choice doesn't exist on system, so just use first available symbol font
+      const QStringList candidates = fontDb.families( QFontDatabase::WritingSystem::Symbol );
+      bool foundGoodCandidate = false;
+      for ( const QString &candidate : candidates )
+      {
+        if ( fontDb.writingSystems( candidate ).size() == 1 )
+        {
+          // family ONLY offers symbol writing systems, so it's a good candidate!
+          fontMarker->setFontFamily( candidate );
+          foundGoodCandidate = true;
+          break;
+        }
+      }
+      if ( !foundGoodCandidate && !candidates.empty() )
+      {
+        // fallback to first available family which advertises symbol writing system
+        QString candidate = candidates.at( 0 );
+        fontMarker->setFontFamily( candidate );
+      }
+    }
+
+    // search (briefly!!) for a unicode character which actually exists in the font
+    const QFontMetrics fontMetrics( fontMarker->fontFamily() );
+    ushort character = fontMarker->character().at( 0 ).unicode();
+    for ( ; character < 1000; ++character )
+    {
+      if ( fontMetrics.inFont( QChar( character ) ) )
+      {
+        fontMarker->setCharacter( QChar( character ) );
+        break;
+      }
     }
   }
 

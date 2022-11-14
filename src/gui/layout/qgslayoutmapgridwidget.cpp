@@ -115,6 +115,7 @@ QgsLayoutMapGridWidget::QgsLayoutMapGridWidget( QgsLayoutItemMapGrid *mapGrid, Q
 
   mMapGridCrsSelector->setOptionVisible( QgsProjectionSelectionWidget::CrsNotSet, true );
   mMapGridCrsSelector->setNotSetText( tr( "Use Map CRS" ) );
+  mMapGridCrsSelector->setDialogTitle( tr( "Grid CRS" ) );
 
   connect( mMapGridCrsSelector, &QgsProjectionSelectionWidget::crsChanged, this, &QgsLayoutMapGridWidget::mapGridCrsChanged );
 
@@ -525,6 +526,7 @@ void QgsLayoutMapGridWidget::setGridItems()
       mGridLineStyleButton->setVisible( false );
       mLineStyleLabel->setVisible( false );
       mGridMarkerStyleButton->setVisible( true );
+      mMarkerStyleFrame->setVisible( true );
       mMarkerStyleLabel->setVisible( true );
       mGridBlendComboBox->setVisible( true );
       mGridBlendLabel->setVisible( true );
@@ -536,6 +538,7 @@ void QgsLayoutMapGridWidget::setGridItems()
       mGridLineStyleButton->setVisible( true );
       mLineStyleLabel->setVisible( true );
       mGridMarkerStyleButton->setVisible( false );
+      mMarkerStyleFrame->setVisible( false );
       mMarkerStyleLabel->setVisible( false );
       mGridBlendComboBox->setVisible( true );
       mGridBlendLabel->setVisible( true );
@@ -547,6 +550,7 @@ void QgsLayoutMapGridWidget::setGridItems()
       mGridLineStyleButton->setVisible( false );
       mLineStyleLabel->setVisible( false );
       mGridMarkerStyleButton->setVisible( false );
+      mMarkerStyleFrame->setVisible( false );
       mMarkerStyleLabel->setVisible( false );
       mGridBlendComboBox->setVisible( false );
       mGridBlendLabel->setVisible( false );
@@ -1156,6 +1160,8 @@ void QgsLayoutMapGridWidget::mGridTypeComboBox_currentIndexChanged( int )
       mGridLineStyleButton->setVisible( true );
       mLineStyleLabel->setVisible( true );
       mGridMarkerStyleButton->setVisible( false );
+      mMarkerStyleFrame->setVisible( false );
+      mMarkerStyleFrame->setVisible( false );
       mMarkerStyleLabel->setVisible( false );
       mGridBlendComboBox->setVisible( true );
       mGridBlendLabel->setVisible( true );
@@ -1169,6 +1175,7 @@ void QgsLayoutMapGridWidget::mGridTypeComboBox_currentIndexChanged( int )
       mGridLineStyleButton->setVisible( false );
       mLineStyleLabel->setVisible( false );
       mGridMarkerStyleButton->setVisible( true );
+      mMarkerStyleFrame->setVisible( true );
       mMarkerStyleLabel->setVisible( true );
       mGridBlendComboBox->setVisible( true );
       mGridBlendLabel->setVisible( true );
@@ -1182,6 +1189,7 @@ void QgsLayoutMapGridWidget::mGridTypeComboBox_currentIndexChanged( int )
       mGridLineStyleButton->setVisible( true );
       mLineStyleLabel->setVisible( true );
       mGridMarkerStyleButton->setVisible( false );
+      mMarkerStyleFrame->setVisible( false );
       mMarkerStyleLabel->setVisible( false );
       mGridBlendComboBox->setVisible( true );
       mGridBlendLabel->setVisible( true );
@@ -1195,6 +1203,7 @@ void QgsLayoutMapGridWidget::mGridTypeComboBox_currentIndexChanged( int )
       mGridLineStyleButton->setVisible( false );
       mLineStyleLabel->setVisible( false );
       mGridMarkerStyleButton->setVisible( false );
+      mMarkerStyleFrame->setVisible( false );
       mMarkerStyleLabel->setVisible( false );
       mGridBlendComboBox->setVisible( false );
       mGridBlendLabel->setVisible( false );
@@ -1247,7 +1256,7 @@ void QgsLayoutMapGridWidget::mAnnotationFormatButton_clicked()
   QgsExpressionContext expressionContext = mMapGrid->createExpressionContext();
   expressionContext.setHighlightedFunctions( QStringList() << QStringLiteral( "to_dms" ) << QStringLiteral( "to_dm" ) );
 
-  QgsExpressionBuilderDialog exprDlg( nullptr, mMapGrid->annotationExpression(), this, QStringLiteral( "generic" ), expressionContext );
+  QgsExpressionBuilderDialog exprDlg( coverageLayer(), mMapGrid->annotationExpression(), this, QStringLiteral( "generic" ), expressionContext );
   exprDlg.setWindowTitle( tr( "Expression Based Annotation" ) );
 
   if ( exprDlg.exec() == QDialog::Accepted )

@@ -140,7 +140,8 @@ void QgsDualView::init( QgsVectorLayer *layer, QgsMapCanvas *mapCanvas, const Qg
   // create an empty form to find out if it needs geometry or not
   const QgsAttributeForm emptyForm( mLayer, QgsFeature(), mEditorContext );
 
-  const bool needsGeometry = !( request.flags() & QgsFeatureRequest::NoGeometry )
+  const bool needsGeometry = mLayer->conditionalStyles()->rulesNeedGeometry() ||
+                             !( request.flags() & QgsFeatureRequest::NoGeometry )
                              || ( request.spatialFilterType() != Qgis::SpatialFilterType::NoFilter )
                              || emptyForm.needsGeometry();
 
@@ -183,6 +184,10 @@ void QgsDualView::initAttributeForm( const QgsFeature &feature )
     mAttributeEditor->layout()->addWidget( mAttributeForm );
   }
 
+  // This is an arbitrary yet small value to fix issue GH #50181
+  // the default value is 0.
+  mAttributeForm->setMinimumWidth( 200 );
+
   setAttributeTableConfig( mLayer->attributeTableConfig() );
 
   connect( mAttributeForm, &QgsAttributeForm::widgetValueChanged, this, &QgsDualView::featureFormAttributeChanged );
@@ -212,15 +217,6 @@ void QgsDualView::columnBoxInit()
   const QList<QgsField> fields = mLayer->fields().toList();
 
   const QString defaultField;
-
-  // default expression: saved value
-  QString displayExpression = mLayer->displayExpression();
-
-  if ( displayExpression.isEmpty() )
-  {
-    // ... there isn't really much to display
-    displayExpression = QStringLiteral( "'[Please define preview text]'" );
-  }
 
   mFeatureListPreviewButton->addAction( mActionExpressionPreview );
   mFeatureListPreviewButton->addAction( mActionPreviewColumnsMenu );
@@ -284,9 +280,10 @@ void QgsDualView::columnBoxInit()
   // If there is no single field found as preview
   if ( !mFeatureListPreviewButton->defaultAction() )
   {
-    mFeatureListView->setDisplayExpression( displayExpression );
+    mFeatureListView->setDisplayExpression( mLayer->displayExpression() );
     mFeatureListPreviewButton->setDefaultAction( mActionExpressionPreview );
-    setDisplayExpression( mFeatureListView->displayExpression() );
+    const QString displayExpression = mFeatureListView->displayExpression();
+    setDisplayExpression( displayExpression.isEmpty() ? tr( "'[Please define preview text]'" ) : displayExpression );
   }
   else
   {
@@ -368,9 +365,14 @@ void QgsDualView::setFilterMode( QgsAttributeTableFilterModel::FilterMode filter
 
     case QgsAttributeTableFilterModel::ShowAll:
     case QgsAttributeTableFilterModel::ShowFilteredList:
+    {
+      const QString filterExpression = filterMode == QgsAttributeTableFilterModel::ShowFilteredList ? mFilterModel->filterExpression() : QString();
+      if ( !filterExpression.isEmpty() )
+        r.setFilterExpression( mFilterModel->filterExpression() );
       connect( mFilterModel, &QgsAttributeTableFilterModel::featuresFiltered, this, &QgsDualView::filterChanged );
       connect( mFilterModel, &QgsAttributeTableFilterModel::filterError, this, &QgsDualView::filterError );
       break;
+    }
 
     case QgsAttributeTableFilterModel::ShowSelected:
       connect( masterModel()->layer(), &QgsVectorLayer::selectionChanged, this, &QgsDualView::updateSelectedFeatures );
@@ -1310,7 +1312,7 @@ void QgsDualView::progress( int i, bool &cancel )
     mProgressDlg->show();
   }
 
-  mProgressDlg->setLabelText( tr( "%1 features loaded." ).arg( i ) );
+  mProgressDlg->setLabelText( tr( "%L1 features loaded." ).arg( i ) );
   QCoreApplication::processEvents();
 
   cancel = mProgressDlg && mProgressDlg->wasCanceled();

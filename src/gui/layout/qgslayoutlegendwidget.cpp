@@ -931,7 +931,7 @@ void QgsLayoutLegendWidget::mAddToolButton_clicked()
   if ( visibleLayers.isEmpty() )
   {
     // just use current canvas layers as visible layers
-    visibleLayers = mMapCanvas->layers();
+    visibleLayers = mMapCanvas->layers( true );
   }
 
   QgsLayoutLegendLayersDialog addDialog( this );
@@ -1498,7 +1498,7 @@ QgsLayoutLegendNodeWidget::QgsLayoutLegendNodeWidget( QgsLayoutItemLegend *legen
   {
     currentLabel = mLayer->name();
     QVariant v = mLayer->customProperty( QStringLiteral( "legend/title-label" ) );
-    if ( !v.isNull() )
+    if ( !QgsVariantUtils::isNull( v ) )
       currentLabel = v.toString();
     mColumnBreakBeforeCheckBox->setChecked( mLayer->customProperty( QStringLiteral( "legend/column-break" ) ).toInt() );
 

@@ -127,6 +127,31 @@ ensemble datum, regardless of the ensemble's accuracy.
 .. versionadded:: 3.20
 %End
 
+    void setDialogTitle( const QString &title );
+%Docstring
+Sets the ``title`` for the CRS selector dialog window.
+
+.. seealso:: :py:func:`dialogTitle`
+
+.. versionadded:: 3.24
+%End
+
+    QString dialogTitle() const;
+%Docstring
+Returns the title for the CRS selector dialog window.
+
+.. seealso:: :py:func:`setDialogTitle`
+
+.. versionadded:: 3.24
+%End
+
+    void setFilter( const QList< QgsCoordinateReferenceSystem > &crses );
+%Docstring
+Sets a filtered list of CRSes to show in the widget.
+
+.. versionadded:: 3.28
+%End
+
   signals:
 
     void crsChanged( const QgsCoordinateReferenceSystem & );

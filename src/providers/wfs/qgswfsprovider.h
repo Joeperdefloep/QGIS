@@ -23,6 +23,7 @@
 #include "qgis.h"
 #include "qgsrectangle.h"
 #include "qgscoordinatereferencesystem.h"
+#include "qgsogcutils.h"
 #include "qgsvectordataprovider.h"
 #include "qgswfscapabilities.h"
 #include "qgswfsfeatureiterator.h"
@@ -126,6 +127,8 @@ class QgsWFSProvider final: public QgsVectorDataProvider
 
     std::shared_ptr<QgsWFSSharedData> sharedData() const { return mShared; }
 
+    void handlePostCloneOperations( QgsVectorDataProvider *source ) override;
+
   private slots:
 
     void featureReceivedAnalyzeOneFeature( QVector<QgsFeatureUniqueIdPair> );
@@ -136,6 +139,15 @@ class QgsWFSProvider final: public QgsVectorDataProvider
   private:
     //! Mutable data shared between provider and feature sources
     std::shared_ptr<QgsWFSSharedData> mShared;
+
+    //! Field set by featureReceivedAnalyzeOneFeature() if a "description" field is set in the sample feature
+    bool mSampleFeatureHasDescription = false;
+
+    //! Field set by featureReceivedAnalyzeOneFeature() if a "identifier" field is set in the sample feature
+    bool mSampleFeatureHasIdentifier = false;
+
+    //! Field set by featureReceivedAnalyzeOneFeature() if a "name" field is set in the sample feature
+    bool mSampleFeatureHasName = false;
 
     /**
      * Invalidates cache of shared object
@@ -148,6 +160,12 @@ class QgsWFSProvider final: public QgsVectorDataProvider
      * Create the geometry element
      */
     QDomElement geometryElement( const QgsGeometry &geometry, QDomDocument &transactionDoc );
+
+    //! Set mShared->mLayerPropertiesList from describeFeatureDocument
+    bool setLayerPropertiesListFromDescribeFeature( QDomDocument &describeFeatureDocument, const QStringList &typenameList, QString &errorMsg );
+
+    //! backup of mShared->mLayerPropertiesList on the feature type when there is no sql request
+    QList< QgsOgcUtils::LayerProperties > mLayerPropertiesListWhenNoSqlRequest;
 
   protected:
 
@@ -213,10 +231,13 @@ class QgsWFSProvider final: public QgsVectorDataProvider
 
 class QgsWfsProviderMetadata final: public QgsProviderMetadata
 {
+    Q_OBJECT
   public:
     QgsWfsProviderMetadata();
+    QIcon icon() const override;
     QList<QgsDataItemProvider *> dataItemProviders() const override;
     QgsWFSProvider *createProvider( const QString &uri, const QgsDataProvider::ProviderOptions &options, QgsDataProvider::ReadFlags flags = QgsDataProvider::ReadFlags() ) override;
+    QList< QgsMapLayerType > supportedLayerTypes() const override;
 };
 
 

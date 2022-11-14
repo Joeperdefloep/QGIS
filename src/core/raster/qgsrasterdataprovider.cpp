@@ -24,6 +24,8 @@
 #include "qgsmessagelog.h"
 #include "qgsapplication.h"
 #include "qgspoint.h"
+#include "qgsvectorfilewriter.h"
+#include "qgsvectorlayer.h"
 
 #include <QTime>
 #include <QMap>
@@ -313,19 +315,18 @@ QgsRasterIdentifyResult QgsRasterDataProvider::identify( const QgsPointXY &point
   const double yMin = yMax - yres;
   const QgsRectangle pixelExtent( xMin, yMin, xMax, yMax );
 
-  for ( int i = 1; i <= bandCount(); i++ )
+  for ( int bandNumber = 1; bandNumber <= bandCount(); bandNumber++ )
   {
-    std::unique_ptr< QgsRasterBlock > bandBlock( block( i, pixelExtent, 1, 1 ) );
+    std::unique_ptr< QgsRasterBlock > bandBlock( block( bandNumber, pixelExtent, 1, 1 ) );
 
     if ( bandBlock )
     {
       const double value = bandBlock->value( 0 );
-
-      results.insert( i, value );
+      results.insert( bandNumber, value );
     }
     else
     {
-      results.insert( i, QVariant() );
+      results.insert( bandNumber, QVariant() );
     }
   }
   return QgsRasterIdentifyResult( QgsRaster::IdentifyFormatValue, results );
@@ -640,6 +641,83 @@ void QgsRasterDataProvider::writeXml( QDomDocument &doc, QDomElement &parentElem
 
   resamplingElement.setAttribute( QStringLiteral( "maxOversampling" ),
                                   QString::number( mMaxOversampling ) );
+}
+
+QgsRasterAttributeTable *QgsRasterDataProvider::attributeTable( int bandNumber ) const
+{
+  try
+  {
+    return mAttributeTables.at( bandNumber ).get();
+  }
+  catch ( std::out_of_range const & )
+  {
+    return nullptr;
+  }
+}
+
+void QgsRasterDataProvider::setAttributeTable( int bandNumber, QgsRasterAttributeTable *attributeTable )
+{
+  if ( attributeTable )
+  {
+    mAttributeTables[ bandNumber ] = std::unique_ptr<QgsRasterAttributeTable>( attributeTable );
+  }
+  else
+  {
+    removeAttributeTable( bandNumber );
+  }
+}
+
+void QgsRasterDataProvider::removeAttributeTable( int bandNumber )
+{
+  if ( mAttributeTables.find( bandNumber ) != std::end( mAttributeTables ) )
+  {
+    mAttributeTables.erase( bandNumber );
+  }
+}
+
+bool QgsRasterDataProvider::writeFileBasedAttributeTable( int bandNumber, const QString &path, QString *errorMessage ) const
+{
+
+  QgsRasterAttributeTable *rat { attributeTable( bandNumber ) };
+  if ( ! rat )
+  {
+    if ( errorMessage )
+    {
+      *errorMessage = QObject::tr( "Raster has no Raster Attribute Table for band %1" ).arg( bandNumber );
+    }
+    return false;
+  }
+
+  return rat->writeToFile( path, errorMessage );
+}
+
+bool QgsRasterDataProvider::readNativeAttributeTable( QString *errorMessage )
+{
+  if ( errorMessage )
+  {
+    *errorMessage = QObject::tr( "Raster data provider has no native Raster Attribute Table support." );
+  }
+  return false;
+}
+
+bool QgsRasterDataProvider::readFileBasedAttributeTable( int bandNumber, const QString &path, QString *errorMessage )
+{
+  std::unique_ptr<QgsRasterAttributeTable> rat = std::make_unique<QgsRasterAttributeTable>();
+  if ( rat->readFromFile( path, errorMessage ) )
+  {
+    setAttributeTable( bandNumber, rat.release() );
+    return true;
+  }
+  else
+  {
+    return false;
+  }
+}
+
+bool QgsRasterDataProvider::writeNativeAttributeTable( QString *errorMessage )  //#spellok
+{
+  Q_UNUSED( errorMessage );
+  return false;
 }
 
 QString QgsRasterDataProvider::colorInterpretationName( int bandNo ) const

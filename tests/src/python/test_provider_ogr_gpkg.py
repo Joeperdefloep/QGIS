@@ -43,8 +43,9 @@ from qgis.core import (Qgis,
                        QgsDataProvider,
                        QgsVectorDataProvider,
                        QgsLayerMetadata,
+                       QgsProviderMetadata,
                        NULL)
-from qgis.PyQt.QtCore import QCoreApplication, QVariant, QDate, QTime, QDateTime, Qt, QTemporaryDir
+from qgis.PyQt.QtCore import QCoreApplication, QVariant, QDate, QTime, QDateTime, Qt, QTemporaryDir, QFileInfo
 from qgis.PyQt.QtXml import QDomDocument
 from qgis.testing import start_app, unittest
 from qgis.utils import spatialite_connect
@@ -81,10 +82,10 @@ class TestPyQgsOGRProviderGpkgConformance(unittest.TestCase, ProviderTestCase):
             cls.basetestpath, 'geopackage_poly.gpkg')
         cls.vl = QgsVectorLayer(
             cls.basetestfile + '|layername=geopackage', 'test', 'ogr')
-        assert(cls.vl.isValid())
+        assert cls.vl.isValid()
         cls.source = cls.vl.dataProvider()
         cls.vl_poly = QgsVectorLayer(cls.basetestpolyfile, 'test', 'ogr')
-        assert (cls.vl_poly.isValid())
+        assert cls.vl_poly.isValid()
         cls.poly_provider = cls.vl_poly.dataProvider()
 
         cls.dirs_to_cleanup = [cls.basetestpath, cls.repackfilepath]
@@ -92,6 +93,7 @@ class TestPyQgsOGRProviderGpkgConformance(unittest.TestCase, ProviderTestCase):
         # Create the other layer for constraints check
         cls.check_constraint = QgsVectorLayer(
             cls.basetestfile + '|layername=check_constraint', 'check_constraint', 'ogr')
+        cls.check_constraint_editing_started = False
 
         # Create the other layer for unique and not null constraints check
         cls.unique_not_null_constraints = QgsVectorLayer(
@@ -101,10 +103,10 @@ class TestPyQgsOGRProviderGpkgConformance(unittest.TestCase, ProviderTestCase):
     @classmethod
     def tearDownClass(cls):
         """Run after all tests"""
-        del(cls.vl)
-        del(cls.vl_poly)
-        del(cls.check_constraint)
-        del(cls.unique_not_null_constraints)
+        del cls.vl
+        del cls.vl_poly
+        del cls.check_constraint
+        del cls.unique_not_null_constraints
         for dirname in cls.dirs_to_cleanup:
             shutil.rmtree(dirname, True)
 
@@ -121,8 +123,16 @@ class TestPyQgsOGRProviderGpkgConformance(unittest.TestCase, ProviderTestCase):
 
     def getEditableLayerWithCheckConstraint(self):
         """Returns the layer for attribute change CHECK constraint violation"""
-
+        if not self.check_constraint_editing_started:
+            self.assertFalse(self.check_constraint_editing_started)
+            self.check_constraint_editing_started = True
+            self.check_constraint.startEditing()
         return self.check_constraint
+
+    def stopEditableLayerWithCheckConstraint(self):
+        self.assertTrue(self.check_constraint_editing_started)
+        self.check_constraint_editing_started = False
+        self.check_constraint.commitChanges()
 
     def getEditableLayerWithUniqueNotNullConstraints(self):
         """Returns the layer for UNIQUE and NOT NULL constraints detection"""
@@ -572,22 +582,29 @@ class TestPyQgsOGRProviderGpkg(unittest.TestCase):
 
         self.assertFalse(vl.dataProvider().isSaveAndLoadStyleToDatabaseSupported())
 
+        res, err = QgsProviderRegistry.instance().styleExists('ogr', '/idont/exist.gpkg', '')
+        self.assertFalse(res)
+        self.assertTrue(err)
+        res, err = QgsProviderRegistry.instance().styleExists('ogr', '/idont/exist.gpkg', 'a style')
+        self.assertFalse(res)
+        self.assertTrue(err)
+
         related_count, idlist, namelist, desclist, errmsg = vl.listStylesInDatabase()
         self.assertEqual(related_count, -1)
         self.assertEqual(idlist, [])
         self.assertEqual(namelist, [])
         self.assertEqual(desclist, [])
-        self.assertNotEqual(errmsg, "")
+        self.assertTrue(errmsg)
 
         qml, errmsg = vl.getStyleFromDatabase("1")
-        self.assertEqual(qml, "")
-        self.assertNotEqual(errmsg, "")
+        self.assertFalse(qml)
+        self.assertTrue(errmsg)
 
         qml, success = vl.loadNamedStyle('/idont/exist.gpkg')
         self.assertFalse(success)
 
         errorMsg = vl.saveStyleToDatabase("name", "description", False, "")
-        self.assertNotEqual(errorMsg, "")
+        self.assertTrue(errorMsg)
 
         # Now with valid URI
         tmpfile = os.path.join(self.basetestpath, 'testStyle.gpkg')
@@ -614,80 +631,99 @@ class TestPyQgsOGRProviderGpkg(unittest.TestCase):
 
         self.assertTrue(vl.dataProvider().isSaveAndLoadStyleToDatabaseSupported())
 
+        # style tables don't exist yet
+        res, err = QgsProviderRegistry.instance().styleExists('ogr', vl.source(), '')
+        self.assertFalse(res)
+        self.assertFalse(err)
+        res, err = QgsProviderRegistry.instance().styleExists('ogr', vl2.source(), 'a style')
+        self.assertFalse(res)
+        self.assertFalse(err)
+
         related_count, idlist, namelist, desclist, errmsg = vl.listStylesInDatabase()
         self.assertEqual(related_count, 0)
         self.assertEqual(idlist, [])
         self.assertEqual(namelist, [])
         self.assertEqual(desclist, [])
-        self.assertNotEqual(errmsg, "")
+        self.assertTrue(errmsg)
 
         qml, errmsg = vl.getStyleFromDatabase("not_existing")
-        self.assertEqual(qml, "")
-        self.assertNotEqual(errmsg, "")
+        self.assertFalse(qml)
+        self.assertTrue(errmsg)
 
         qml, success = vl.loadNamedStyle('{}|layerid=0'.format(tmpfile))
         self.assertFalse(success)
 
         errorMsg = vl.saveStyleToDatabase("name", "description", False, "")
-        self.assertEqual(errorMsg, "")
+        self.assertFalse(errorMsg)
+
+        res, err = QgsProviderRegistry.instance().styleExists('ogr', vl.source(), '')
+        self.assertFalse(res)
+        self.assertFalse(err)
+        res, err = QgsProviderRegistry.instance().styleExists('ogr', vl.source(), 'a style')
+        self.assertFalse(res)
+        self.assertFalse(err)
+        res, err = QgsProviderRegistry.instance().styleExists('ogr', vl.source(), 'name')
+        self.assertTrue(res)
+        self.assertFalse(err)
 
         qml, errmsg = vl.getStyleFromDatabase("not_existing")
-        self.assertEqual(qml, "")
-        self.assertNotEqual(errmsg, "")
+        self.assertFalse(qml)
+        self.assertTrue(errmsg)
 
         related_count, idlist, namelist, desclist, errmsg = vl.listStylesInDatabase()
         self.assertEqual(related_count, 1)
-        self.assertEqual(errmsg, "")
+        self.assertFalse(errmsg)
         self.assertEqual(idlist, ['1'])
         self.assertEqual(namelist, ['name'])
         self.assertEqual(desclist, ['description'])
 
         qml, errmsg = vl.getStyleFromDatabase("100")
-        self.assertEqual(qml, "")
-        self.assertNotEqual(errmsg, "")
+        self.assertFalse(qml)
+        self.assertTrue(errmsg)
 
         qml, errmsg = vl.getStyleFromDatabase("1")
         self.assertTrue(qml.startswith('<!DOCTYPE qgis'), qml)
-        self.assertEqual(errmsg, "")
+        self.assertFalse(errmsg)
 
-        # Try overwrite it but simulate answer no
-        settings = QgsSettings()
-        settings.setValue("/qgis/overwriteStyle", False)
+        # Try overwriting an existing style
         errorMsg = vl.saveStyleToDatabase("name", "description_bis", False, "")
-        self.assertNotEqual(errorMsg, "")
+        self.assertFalse(errorMsg)
+
+        res, err = QgsProviderRegistry.instance().styleExists('ogr', vl.source(), 'name')
+        self.assertTrue(res)
+        self.assertFalse(err)
 
         related_count, idlist, namelist, desclist, errmsg = vl.listStylesInDatabase()
         self.assertEqual(related_count, 1)
-        self.assertEqual(errmsg, "")
-        self.assertEqual(idlist, ['1'])
-        self.assertEqual(namelist, ['name'])
-        self.assertEqual(desclist, ['description'])
-
-        # Try overwrite it and simulate answer yes
-        settings = QgsSettings()
-        settings.setValue("/qgis/overwriteStyle", True)
-        errorMsg = vl.saveStyleToDatabase("name", "description_bis", False, "")
-        self.assertEqual(errorMsg, "")
-
-        related_count, idlist, namelist, desclist, errmsg = vl.listStylesInDatabase()
-        self.assertEqual(related_count, 1)
-        self.assertEqual(errmsg, "")
+        self.assertFalse(errmsg)
         self.assertEqual(idlist, ['1'])
         self.assertEqual(namelist, ['name'])
         self.assertEqual(desclist, ['description_bis'])
 
         errorMsg = vl2.saveStyleToDatabase("name_test2", "description_test2", True, "")
-        self.assertEqual(errorMsg, "")
+        self.assertFalse(errorMsg)
+
+        res, err = QgsProviderRegistry.instance().styleExists('ogr', vl2.source(), 'name_test2')
+        self.assertTrue(res)
+        self.assertFalse(err)
 
         errorMsg = vl.saveStyleToDatabase("name2", "description2", True, "")
-        self.assertEqual(errorMsg, "")
+        self.assertFalse(errorMsg)
+
+        res, err = QgsProviderRegistry.instance().styleExists('ogr', vl.source(), 'name2')
+        self.assertTrue(res)
+        self.assertFalse(err)
 
         errorMsg = vl.saveStyleToDatabase("name3", "description3", True, "")
-        self.assertEqual(errorMsg, "")
+        self.assertFalse(errorMsg)
+
+        res, err = QgsProviderRegistry.instance().styleExists('ogr', vl.source(), 'name3')
+        self.assertTrue(res)
+        self.assertFalse(err)
 
         related_count, idlist, namelist, desclist, errmsg = vl.listStylesInDatabase()
         self.assertEqual(related_count, 3)
-        self.assertEqual(errmsg, "")
+        self.assertFalse(errmsg)
         self.assertEqual(idlist, ['1', '3', '4', '2'])
         self.assertEqual(namelist, ['name', 'name2', 'name3', 'name_test2'])
         self.assertEqual(desclist, ['description_bis', 'description2', 'description3', 'description_test2'])
@@ -697,6 +733,16 @@ class TestPyQgsOGRProviderGpkg(unittest.TestCase):
         sublayers = vl.dataProvider().subLayers()
         self.assertEqual(2, vl.dataProvider().subLayerCount())
         self.assertEqual(len(sublayers), 2, sublayers)
+
+    @staticmethod
+    def _getJournalMode(filename):
+        ds = ogr.Open(filename)
+        lyr = ds.ExecuteSQL('PRAGMA journal_mode')
+        f = lyr.GetNextFeature()
+        res = f.GetField(0)
+        ds.ReleaseResultSet(lyr)
+        ds = None
+        return res
 
     def testDisablewalForSqlite3(self):
         ''' Test disabling walForSqlite3 setting '''
@@ -716,13 +762,7 @@ class TestPyQgsOGRProviderGpkg(unittest.TestCase):
         vl = QgsVectorLayer(u'{}'.format(tmpfile), u'test', u'ogr')
 
         # Test that we are using default delete mode and not WAL
-        ds = ogr.Open(tmpfile)
-        lyr = ds.ExecuteSQL('PRAGMA journal_mode')
-        f = lyr.GetNextFeature()
-        res = f.GetField(0)
-        ds.ReleaseResultSet(lyr)
-        ds = None
-        self.assertEqual(res, 'delete')
+        self.assertEqual(TestPyQgsOGRProviderGpkg._getJournalMode(tmpfile), 'delete')
 
         self.assertTrue(vl.startEditing())
         feature = next(vl.getFeatures())
@@ -736,6 +776,32 @@ class TestPyQgsOGRProviderGpkg(unittest.TestCase):
         vl = None
 
         QgsSettings().setValue("/qgis/walForSqlite3", None)
+
+    @unittest.skipIf(int(gdal.VersionInfo('VERSION_NUM')) < GDAL_COMPUTE_VERSION(3, 4, 2), "GDAL 3.4.2 required")
+    def testNolock(self):
+        """ Test that with GDAL >= 3.4.2 opening a GPKG file doesn't turn on WAL journal_mode """
+
+        srcpath = os.path.join(TEST_DATA_DIR, 'provider')
+        srcfile = os.path.join(srcpath, 'geopackage.gpkg')
+
+        last_modified = QFileInfo(srcfile).lastModified()
+        vl = QgsVectorLayer(u'{}'.format(srcfile) + "|layername=geopackage", u'test', u'ogr')
+        self.assertEqual(TestPyQgsOGRProviderGpkg._getJournalMode(srcfile), 'delete')
+        del vl
+        self.assertEqual(last_modified, QFileInfo(srcfile).lastModified())
+
+        shutil.copy(os.path.join(srcpath, 'geopackage.gpkg'), self.basetestpath)
+        tmpfile = os.path.join(self.basetestpath, 'geopackage.gpkg')
+
+        vl = QgsVectorLayer(u'{}'.format(tmpfile) + "|layername=geopackage", u'test', u'ogr')
+
+        self.assertEqual(TestPyQgsOGRProviderGpkg._getJournalMode(tmpfile), 'delete')
+
+        vl.startEditing()
+        self.assertEqual(TestPyQgsOGRProviderGpkg._getJournalMode(tmpfile), 'wal')
+        vl.commitChanges()
+
+        self.assertEqual(TestPyQgsOGRProviderGpkg._getJournalMode(tmpfile), 'delete')
 
     def testSimulatedDBManagerImport(self):
         uri = 'point?field=f1:int'
@@ -832,6 +898,7 @@ class TestPyQgsOGRProviderGpkg(unittest.TestCase):
                                           QgsCoordinateReferenceSystem('EPSG:3111'), False, options)
         self.assertFalse(exporter.errorCode(),
                          'unexpected export error {}: {}'.format(exporter.errorCode(), exporter.errorMessage()))
+        del exporter
         options['layerName'] = 'table2'
         exporter = QgsVectorLayerExporter(tmpfile, "ogr", fields, QgsWkbTypes.Point, QgsCoordinateReferenceSystem('EPSG:3113'),
                                           False, options)
@@ -1543,7 +1610,7 @@ class TestPyQgsOGRProviderGpkg(unittest.TestCase):
 
         # prepare a project with transactions enabled
         p = QgsProject()
-        p.setAutoTransaction(True)
+        p.setTransactionMode(Qgis.TransactionMode.AutomaticGroups)
         p.addMapLayers([vl1, vl2])
 
         self.assertTrue(vl1.startEditing())
@@ -2056,7 +2123,7 @@ class TestPyQgsOGRProviderGpkg(unittest.TestCase):
         """Test issue GH #36525"""
 
         project = QgsProject()
-        project.setAutoTransaction(True)
+        project.setTransactionMode(Qgis.TransactionMode.AutomaticGroups)
         tmpfile1 = os.path.join(self.basetestpath, 'tempGeoPackageTransactionGroup1.gpkg')
         tmpfile2 = os.path.join(self.basetestpath, 'tempGeoPackageTransactionGroup2.gpkg')
         for tmpfile in (tmpfile1, tmpfile2):
@@ -2098,7 +2165,7 @@ class TestPyQgsOGRProviderGpkg(unittest.TestCase):
         forever in an endless loop"""
 
         project = QgsProject()
-        project.setAutoTransaction(True)
+        project.setTransactionMode(Qgis.TransactionMode.AutomaticGroups)
         tmpfile = os.path.join(
             self.basetestpath, 'tempGeoPackageTransactionGroupIterator.gpkg')
         ds = ogr.GetDriverByName('GPKG').CreateDataSource(tmpfile)
@@ -2128,7 +2195,7 @@ class TestPyQgsOGRProviderGpkg(unittest.TestCase):
         """Test issue GH #39265 segfault"""
 
         project = QgsProject()
-        project.setAutoTransaction(True)
+        project.setTransactionMode(Qgis.TransactionMode.AutomaticGroups)
         tmpfile = os.path.join(
             self.basetestpath, 'tempGeoPackageTransactionCrash.gpkg')
         ds = ogr.GetDriverByName('GPKG').CreateDataSource(tmpfile)
@@ -2163,7 +2230,9 @@ class TestPyQgsOGRProviderGpkg(unittest.TestCase):
     def _testVectorLayerExporterDeferredSpatialIndex(self, layerOptions, expectSpatialIndex):
         """ Internal method """
 
-        tmpfile = '/vsimem/_testVectorLayerExporterDeferredSpatialIndex.gpkg'
+        tmpfile = os.path.join(
+            self.basetestpath, 'testVectorLayerExporterDeferredSpatialIndex.gpkg')
+        gdal.Unlink(tmpfile)
         options = {}
         options['driverName'] = 'GPKG'
         options['layerName'] = 'table1'
@@ -2357,6 +2426,11 @@ class TestPyQgsOGRProviderGpkg(unittest.TestCase):
         f['my--thing\'s'] = 'my "things -- all'
         f.SetGeometry(ogr.CreateGeometryFromWkt('POINT(1 1)'))
         lyr.CreateFeature(f)
+        f = ogr.Feature(lyr.GetLayerDefn())
+        f['text_field'] = 'three'
+        f['my--thing\'s'] = 'my "things \n all'
+        f.SetGeometry(ogr.CreateGeometryFromWkt('POINT(2 2)'))
+        lyr.CreateFeature(f)
         del (lyr)
 
         def _test(subset_string):
@@ -2369,6 +2443,7 @@ class TestPyQgsOGRProviderGpkg(unittest.TestCase):
         _test(' SELECT * --comment\nFROM "my--test" WHERE\ntext_field=\'one\' AND \ntext_field != \'--embedded comment\'')
         _test('SELECT * FROM "my--test" WHERE text_field=\'one\' AND text_field != \' \\\'--embedded comment\'')
         _test('select "my--thing\'s" from "my--test" where "my--thing\'s" = \'my "things -- all\'')
+        _test('select "my--thing\'s" from "my--test" where "my--thing\'s" = \'my "things \n all\'')
 
     def testIsSqlQuery(self):
         """Test that isQuery returns what it should in case of simple filters"""
@@ -2403,6 +2478,123 @@ class TestPyQgsOGRProviderGpkg(unittest.TestCase):
 
         # Test flags
         self.assertFalse(vl2.vectorLayerTypeFlags() & Qgis.VectorLayerTypeFlag.SqlQuery)
+
+    def testCircularStringOnlyInUnknownTypeLayer(self):
+        """ Test bugfix for https://github.com/qgis/QGIS/issues/47610 """
+
+        tmpfile = os.path.join(self.basetestpath, 'testCircularStringOnlyInUnknownTypeLayer.gpkg')
+        ds = ogr.GetDriverByName('GPKG').CreateDataSource(tmpfile)
+        lyr = ds.CreateLayer('test', geom_type=ogr.wkbUnknown)
+        f = ogr.Feature(lyr.GetLayerDefn())
+        f.SetGeometry(ogr.CreateGeometryFromWkt('CIRCULARSTRING(0 0,1 1,2 0)'))
+        lyr.CreateFeature(f)
+        ds = None
+
+        vl = QgsVectorLayer('{}'.format(tmpfile), 'test', 'ogr')
+        self.assertEqual(1, vl.dataProvider().subLayerCount())
+        self.assertEqual(vl.dataProvider().subLayers(),
+                         [QgsDataProvider.SUBLAYER_SEPARATOR.join(['0', 'test', '1', 'CircularString', 'geom', ''])])
+
+        vl = QgsVectorLayer('{}'.format(tmpfile) + '|geometryType=CircularString', 'test', 'ogr')
+        got = [feat for feat in vl.getFeatures()]
+        self.assertEqual(len(got), 1)
+
+    def testCompoundCurveOnlyInUnknownTypeLayer(self):
+        """ Test bugfix for https://github.com/qgis/QGIS/issues/47610 """
+
+        tmpfile = os.path.join(self.basetestpath, 'testCompoundCurveOnlyInUnknownTypeLayer.gpkg')
+        ds = ogr.GetDriverByName('GPKG').CreateDataSource(tmpfile)
+        lyr = ds.CreateLayer('test', geom_type=ogr.wkbUnknown)
+        f = ogr.Feature(lyr.GetLayerDefn())
+        f.SetGeometry(ogr.CreateGeometryFromWkt('COMPOUNDCURVE((7 8,9 10))'))
+        lyr.CreateFeature(f)
+        ds = None
+
+        vl = QgsVectorLayer('{}'.format(tmpfile), 'test', 'ogr')
+        self.assertEqual(1, vl.dataProvider().subLayerCount())
+        self.assertEqual(vl.dataProvider().subLayers(),
+                         [QgsDataProvider.SUBLAYER_SEPARATOR.join(['0', 'test', '1', 'CompoundCurve', 'geom', ''])])
+
+        vl = QgsVectorLayer('{}'.format(tmpfile) + '|geometryType=CompoundCurve', 'test', 'ogr')
+        got = [feat for feat in vl.getFeatures()]
+        self.assertEqual(len(got), 1)
+
+    def testCurvePolygonOnlyInUnknownTypeLayer(self):
+        """ Test bugfix for https://github.com/qgis/QGIS/issues/47610 """
+
+        tmpfile = os.path.join(self.basetestpath, 'testCurvePolygonOnlyInUnknownTypeLayer.gpkg')
+        ds = ogr.GetDriverByName('GPKG').CreateDataSource(tmpfile)
+        lyr = ds.CreateLayer('test', geom_type=ogr.wkbUnknown)
+        f = ogr.Feature(lyr.GetLayerDefn())
+        f.SetGeometry(ogr.CreateGeometryFromWkt('CURVEPOLYGON((10 10,10 11,11 11,10 10))'))
+        lyr.CreateFeature(f)
+        ds = None
+
+        vl = QgsVectorLayer('{}'.format(tmpfile), 'test', 'ogr')
+        self.assertEqual(1, vl.dataProvider().subLayerCount())
+        self.assertEqual(vl.dataProvider().subLayers(),
+                         [QgsDataProvider.SUBLAYER_SEPARATOR.join(['0', 'test', '1', 'CurvePolygon', 'geom', ''])])
+
+        vl = QgsVectorLayer('{}'.format(tmpfile) + '|geometryType=CurvePolygon', 'test', 'ogr')
+        got = [feat for feat in vl.getFeatures()]
+        self.assertEqual(len(got), 1)
+
+    def testCurveGeometryTypeInUnknownTypeLayer(self):
+        """ Test bugfix for https://github.com/qgis/QGIS/issues/47610 """
+
+        tmpfile = os.path.join(self.basetestpath, 'testFilterCurveGeometryType.gpkg')
+        ds = ogr.GetDriverByName('GPKG').CreateDataSource(tmpfile)
+        lyr = ds.CreateLayer('test', geom_type=ogr.wkbUnknown)
+        f = ogr.Feature(lyr.GetLayerDefn())
+        f.SetGeometry(ogr.CreateGeometryFromWkt('CIRCULARSTRING(0 0,1 1,2 0)'))
+        lyr.CreateFeature(f)
+        f = ogr.Feature(lyr.GetLayerDefn())
+        f.SetGeometry(ogr.CreateGeometryFromWkt('CIRCULARSTRING Z(0 -10 10,1 -11 10,2 -10 10)'))
+        lyr.CreateFeature(f)
+        f = ogr.Feature(lyr.GetLayerDefn())
+        f.SetGeometry(ogr.CreateGeometryFromWkt('MULTILINESTRING((3 4,5 6))'))
+        lyr.CreateFeature(f)
+        f = ogr.Feature(lyr.GetLayerDefn())
+        f.SetGeometry(ogr.CreateGeometryFromWkt('COMPOUNDCURVE((7 8,9 10))'))
+        lyr.CreateFeature(f)
+        f = ogr.Feature(lyr.GetLayerDefn())
+        f.SetGeometry(ogr.CreateGeometryFromWkt('CURVEPOLYGON((10 10,10 11,11 11,10 10))'))
+        lyr.CreateFeature(f)
+        f = ogr.Feature(lyr.GetLayerDefn())
+        f.SetGeometry(ogr.CreateGeometryFromWkt('POLYGON((10 20,10 21,11 21,10 20))'))
+        lyr.CreateFeature(f)
+        ds = None
+
+        vl = QgsVectorLayer('{}'.format(tmpfile), 'test', 'ogr')
+        self.assertEqual(1, vl.dataProvider().subLayerCount())
+        self.assertEqual(vl.dataProvider().subLayers(),
+                         [QgsDataProvider.SUBLAYER_SEPARATOR.join(['0', 'test', '4', 'CompoundCurve', 'geom', '']),
+                          QgsDataProvider.SUBLAYER_SEPARATOR.join(['0', 'test', '2', 'CurvePolygon', 'geom', ''])])
+
+        vl = QgsVectorLayer('{}'.format(tmpfile) + '|geometryType=CompoundCurve', 'test', 'ogr')
+        got = [feat for feat in vl.getFeatures()]
+        self.assertEqual(len(got), 4)
+
+        vl = QgsVectorLayer('{}'.format(tmpfile) + '|geometryType=CurvePolygon', 'test', 'ogr')
+        got = [feat for feat in vl.getFeatures()]
+        self.assertEqual(len(got), 2)
+
+    def testCreateEmptyDatabase(self):
+        """ Test creating an empty database via the provider metadata """
+        metadata = QgsProviderRegistry.instance().providerMetadata('ogr')
+        self.assertTrue(metadata.capabilities() & QgsProviderMetadata.ProviderMetadataCapability.CreateDatabase)
+
+        with tempfile.TemporaryDirectory() as dest_dir:
+            database_path = os.path.join(dest_dir, 'new_gpkg.gpkg')
+            ok, err = metadata.createDatabase(database_path)
+            self.assertTrue(ok)
+            self.assertFalse(err)
+            self.assertTrue(os.path.exists(database_path))
+
+            # try to create again, should error out
+            ok, err = metadata.createDatabase(database_path)
+            self.assertFalse(ok)
+            self.assertTrue(err)
 
 
 if __name__ == '__main__':

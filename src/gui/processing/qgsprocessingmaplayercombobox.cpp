@@ -88,7 +88,7 @@ QgsProcessingMapLayerComboBox::QgsProcessingMapLayerComboBox( const QgsProcessin
   mSelectButton->setToolTip( tr( "Select input" ) );
   layout->addWidget( mSelectButton );
   layout->setAlignment( mSelectButton, Qt::AlignTop );
-  if ( mParameter->type() == QgsProcessingParameterFeatureSource::typeName() )
+  if ( mParameter->type() == QgsProcessingParameterFeatureSource::typeName() || mParameter->type() == QgsProcessingParameterVectorLayer::typeName() )
   {
     mFeatureSourceMenu = new QMenu( this );
     QAction *selectFromFileAction = new QAction( tr( "Select File…" ), mFeatureSourceMenu );
@@ -159,6 +159,10 @@ QgsProcessingMapLayerComboBox::QgsProcessingMapLayerComboBox( const QgsProcessin
   {
     filters = QgsMapLayerProxyModel::MeshLayer;
   }
+  else if ( mParameter->type() == QgsProcessingParameterPointCloudLayer::typeName() )
+  {
+    filters = QgsMapLayerProxyModel::PointCloudLayer;
+  }
   else if ( mParameter->type() == QgsProcessingParameterMapLayer::typeName() )
   {
     QList<int> dataTypes;
@@ -176,6 +180,8 @@ QgsProcessingMapLayerComboBox::QgsProcessingMapLayerComboBox( const QgsProcessin
       filters |= QgsMapLayerProxyModel::RasterLayer;
     if ( dataTypes.contains( QgsProcessing::TypeMesh ) )
       filters |= QgsMapLayerProxyModel::MeshLayer;
+    if ( dataTypes.contains( QgsProcessing::TypePointCloud ) )
+      filters |= QgsMapLayerProxyModel::PointCloudLayer;
     if ( !filters )
       filters = QgsMapLayerProxyModel::All;
   }
@@ -239,7 +245,7 @@ void QgsProcessingMapLayerComboBox::setValue( const QVariant &value, QgsProcessi
   bool found = false;
   bool selectedOnly = false;
   bool iterate = false;
-  if ( val.canConvert<QgsProcessingFeatureSourceDefinition>() )
+  if ( val.userType() == QMetaType::type( "QgsProcessingFeatureSourceDefinition" ) )
   {
     QgsProcessingFeatureSourceDefinition fromVar = qvariant_cast<QgsProcessingFeatureSourceDefinition>( val );
     val = fromVar.source;
@@ -256,7 +262,7 @@ void QgsProcessingMapLayerComboBox::setValue( const QVariant &value, QgsProcessi
     mGeometryCheck = QgsFeatureRequest::GeometryAbortOnInvalid;
   }
 
-  if ( val.canConvert<QgsProperty>() )
+  if ( val.userType() == QMetaType::type( "QgsProperty" ) )
   {
     if ( val.value< QgsProperty >().propertyType() == QgsProperty::StaticProperty )
     {
@@ -379,6 +385,7 @@ QVariant QgsProcessingMapLayerComboBox::value() const
 void QgsProcessingMapLayerComboBox::setWidgetContext( const QgsProcessingParameterWidgetContext &context )
 {
   mBrowserModel = context.browserModel();
+  mCombo->setProject( context.project() );
 }
 
 void QgsProcessingMapLayerComboBox::setEditable( bool editable )

@@ -37,7 +37,7 @@ void QgsRasterInterface::initStatistics( QgsRasterBandStats &statistics,
     int bandNo,
     int stats,
     const QgsRectangle &boundingBox,
-    int sampleSize )
+    int sampleSize ) const
 {
   QgsDebugMsgLevel( QStringLiteral( "theBandNo = %1 sampleSize = %2" ).arg( bandNo ).arg( sampleSize ), 4 );
 
@@ -642,4 +642,14 @@ QString QgsRasterInterface::displayBandName( int bandNumber ) const
     name.append( QStringLiteral( " (%1)" ).arg( colorInterp ) );
   }
   return name;
+}
+
+QgsRenderContext QgsRasterBlockFeedback::renderContext() const
+{
+  return mRenderContext;
+}
+
+void QgsRasterBlockFeedback::setRenderContext( const QgsRenderContext &renderContext )
+{
+  mRenderContext = renderContext;
 }

@@ -42,6 +42,8 @@ class CORE_EXPORT QgsAction
       Windows,
       Unix,
       OpenUrl,
+      SubmitUrlEncoded, //!< POST data to an URL, using "application/x-www-form-urlencoded" or "application/json" if the body is valid JSON \since QGIS 3.24
+      SubmitUrlMultipart, //!< POST data to an URL using "multipart/form-data"  \since QGIS 3.24
     };
 
     /**
@@ -254,7 +256,15 @@ class CORE_EXPORT QgsAction
      */
     QString html( ) const;
 
+    /**
+     * Sets the action \a command.
+     * \since QGIS 3.26
+     */
+    void setCommand( const QString &newCommand );
+
   private:
+
+    void handleFormSubmitAction( const QString &expandedAction ) const;
     ActionType mType = Generic;
     QString mDescription;
     QString mShortTitle;

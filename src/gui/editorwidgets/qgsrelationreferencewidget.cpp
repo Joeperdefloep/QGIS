@@ -54,7 +54,7 @@ bool qVariantListIsNull( const QVariantList &list )
 
   for ( int i = 0; i < list.size(); ++i )
   {
-    if ( !list.at( i ).isNull() )
+    if ( !QgsVariantUtils::isNull( list.at( i ) ) )
       return false;
   }
   return true;
@@ -270,7 +270,7 @@ void QgsRelationReferenceWidget::setForeignKeys( const QVariantList &values )
     for ( int i = 0; i < count; i++ )
     {
       QVariant v = mFeature.attribute( mFilterFields[i] );
-      QString f = v.isNull() ? nullValue.toString() : v.toString();
+      QString f = QgsVariantUtils::isNull( v ) ? nullValue.toString() : v.toString();
       mFilterComboBoxes.at( i )->setCurrentIndex( mFilterComboBoxes.at( i )->findText( f ) );
     }
   }
@@ -464,8 +464,8 @@ void QgsRelationReferenceWidget::init()
           {
             QVariant cv = ft.attribute( mFilterFields.at( i ) );
             QVariant nv = ft.attribute( mFilterFields.at( i + 1 ) );
-            QString cf = cv.isNull() ? nullValue.toString() : cv.toString();
-            QString nf = nv.isNull() ? nullValue.toString() : nv.toString();
+            QString cf = QgsVariantUtils::isNull( cv ) ? nullValue.toString() : cv.toString();
+            QString nf = QgsVariantUtils::isNull( nv ) ? nullValue.toString() : nv.toString();
             mFilterCache[mFilterFields[i]][cf] << nf;
           }
         }
@@ -498,7 +498,7 @@ void QgsRelationReferenceWidget::init()
       for ( int i = 0; i < mFilterFields.size(); i++ )
       {
         QVariant v = mFeature.attribute( mFilterFields[i] );
-        QString f = v.isNull() ? nullValue.toString() : v.toString();
+        QString f = QgsVariantUtils::isNull( v ) ? nullValue.toString() : v.toString();
         mFilterComboBoxes.at( i )->setCurrentIndex( mFilterComboBoxes.at( i )->findText( f ) );
       }
     }
@@ -536,8 +536,8 @@ void QgsRelationReferenceWidget::openForm()
     return;
 
   QgsAttributeEditorContext context( mEditorContext, mRelation, QgsAttributeEditorContext::Single, QgsAttributeEditorContext::StandaloneDialog );
-  QgsAttributeDialog attributeDialog( mReferencedLayer, new QgsFeature( feat ), true, this, true, context );
-  attributeDialog.exec();
+  QgsAttributeDialog *attributeDialog = new QgsAttributeDialog( mReferencedLayer, new QgsFeature( feat ), true, this, true, context );
+  attributeDialog->show();
 }
 
 void QgsRelationReferenceWidget::highlightFeature( QgsFeature f, CanvasExtent canvasExtent )
@@ -808,11 +808,11 @@ void QgsRelationReferenceWidget::filterChanged()
           QgsAttributeList subset = attrs;
 
           QString expression = filterExpression;
-          if ( ! filterExpression.isEmpty() && ! filtersAttrs.values().isEmpty() )
+          if ( ! filterExpression.isEmpty() && ! filtersAttrs.isEmpty() )
             expression += QLatin1String( " AND " );
 
           expression += filtersAttrs.isEmpty() ? QString() : QStringLiteral( " ( " );
-          expression += filtersAttrs.values().join( QLatin1String( " AND " ) );
+          expression += qgsMapJoinValues( filtersAttrs, QLatin1String( " AND " ) );
           expression += filtersAttrs.isEmpty() ? QString() : QStringLiteral( " ) " );
 
           subset << mReferencedLayer->fields().lookupField( fieldName );
@@ -844,11 +844,11 @@ void QgsRelationReferenceWidget::filterChanged()
     }
   }
 
-  if ( ! filterExpression.isEmpty() && ! filters.values().isEmpty() )
+  if ( ! filterExpression.isEmpty() && ! filters.isEmpty() )
     filterExpression += QLatin1String( " AND " );
 
   filterExpression += filters.isEmpty() ? QString() : QStringLiteral( " ( " );
-  filterExpression += filters.values().join( QLatin1String( " AND " ) );
+  filterExpression += qgsMapJoinValues( filters, QLatin1String( " AND " ) );
   filterExpression += filters.isEmpty() ? QString() : QStringLiteral( " ) " );
 
   mComboBox->setFilterExpression( filterExpression );
@@ -908,7 +908,7 @@ void QgsRelationReferenceWidget::entryAdded( const QgsFeature &feat )
     }
   }
 
-  if ( mEditorContext.vectorLayerTools()->addFeature( mReferencedLayer, attributes, f.geometry(), &f ) )
+  if ( mEditorContext.vectorLayerTools()->addFeature( mReferencedLayer, attributes, f.geometry(), &f, this, false, true ) )
   {
     QVariantList attrs;
     for ( const QString &fieldName : std::as_const( mReferencedFields ) )

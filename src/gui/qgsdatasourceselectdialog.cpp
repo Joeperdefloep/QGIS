@@ -63,6 +63,7 @@ QgsDataSourceSelectWidget::QgsDataSourceSelectWidget(
   else
   {
     mBrowserTreeView->setModel( &mBrowserProxyModel );
+    mBrowserTreeView->setBrowserModel( mBrowserModel );
     setValid( false );
   }
 
@@ -174,7 +175,7 @@ void QgsDataSourceSelectWidget::setDescription( const QString &description )
         const QUrl url( link );
         const QFileInfo file( url.toLocalFile() );
         if ( file.exists() && !file.isDir() )
-          QgsGui::instance()->nativePlatformInterface()->openFileExplorerAndSelectFile( url.toLocalFile() );
+          QgsGui::nativePlatformInterface()->openFileExplorerAndSelectFile( url.toLocalFile() );
         else
           QDesktopServices::openUrl( url );
       } );
@@ -191,6 +192,11 @@ void QgsDataSourceSelectWidget::setDescription( const QString &description )
       mDescriptionLabel = nullptr;
     }
   }
+}
+
+void QgsDataSourceSelectWidget::expandPath( const QString &path )
+{
+  mBrowserTreeView->expandPath( path );
 }
 
 void QgsDataSourceSelectWidget::setFilter()
@@ -268,6 +274,7 @@ void QgsDataSourceSelectWidget::setLayerTypeFilter( QgsMapLayerType layerType )
   mBrowserProxyModel.setLayerType( layerType );
   // reset model and button
   mBrowserTreeView->setModel( &mBrowserProxyModel );
+  mBrowserTreeView->setBrowserModel( mBrowserModel );
   setValid( false );
 }
 
@@ -345,6 +352,11 @@ void QgsDataSourceSelectDialog::setLayerTypeFilter( QgsMapLayerType layerType )
 void QgsDataSourceSelectDialog::setDescription( const QString &description )
 {
   mWidget->setDescription( description );
+}
+
+void QgsDataSourceSelectDialog::expandPath( const QString &path )
+{
+  mWidget->expandPath( path );
 }
 
 QgsMimeDataUtils::Uri QgsDataSourceSelectDialog::uri() const

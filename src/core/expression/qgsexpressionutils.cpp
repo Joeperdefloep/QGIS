@@ -16,6 +16,9 @@
 #include "qgsexpressionutils.h"
 #include "qgsexpressionnode.h"
 #include "qgsvectorlayer.h"
+#include "qgscolorrampimpl.h"
+#include "qgsproviderregistry.h"
+#include "qgsvariantutils.h"
 
 ///@cond PRIVATE
 
@@ -35,6 +38,39 @@ QgsExpressionUtils::TVL QgsExpressionUtils::OR[3][3] =
 
 QgsExpressionUtils::TVL QgsExpressionUtils::NOT[3] = { True, False, Unknown };
 
+
+QgsGradientColorRamp QgsExpressionUtils::getRamp( const QVariant &value, QgsExpression *parent, bool report_error )
+{
+  if ( value.userType() == QMetaType::type( "QgsGradientColorRamp" ) )
+    return value.value<QgsGradientColorRamp>();
+
+  // If we get here then we can't convert so we just error and return invalid.
+  if ( report_error )
+    parent->setEvalErrorString( QObject::tr( "Cannot convert '%1' to gradient ramp" ).arg( value.toString() ) );
+
+  return QgsGradientColorRamp();
+}
+
+QString QgsExpressionUtils::getFilePathValue( const QVariant &value, QgsExpression *parent )
+{
+  // if it's a map layer, return the file path of that layer...
+  QString res;
+  if ( QgsMapLayer *layer = getMapLayer( value, parent ) )
+  {
+    const QVariantMap parts = QgsProviderRegistry::instance()->decodeUri( layer->providerType(), layer->source() );
+    res = parts.value( QStringLiteral( "path" ) ).toString();
+  }
+
+  if ( res.isEmpty() )
+    res = value.toString();
+
+  if ( res.isEmpty() && !QgsVariantUtils::isNull( value ) )
+  {
+    parent->setEvalErrorString( QObject::tr( "Cannot convert value to a file path" ) );
+  }
+  return res;
+}
+
 ///@endcond
 
 std::tuple<QVariant::Type, int> QgsExpressionUtils::determineResultType( const QString &expression, const QgsVectorLayer *layer, QgsFeatureRequest request, QgsExpressionContext context, bool *foundFeatures )
@@ -46,6 +82,17 @@ std::tuple<QVariant::Type, int> QgsExpressionUtils::determineResultType( const Q
   request.setLimit( 10 );
   request.setExpressionContext( context );
 
+  // avoid endless recursion by removing virtual fields while going through features
+  // to determine result type
+  QgsAttributeList attributes;
+  const QgsFields fields = layer->fields();
+  for ( int i = 0; i < fields.count(); i++ )
+  {
+    if ( fields.fieldOrigin( i ) != QgsFields::OriginExpression )
+      attributes << i;
+  }
+  request.setSubsetOfAttributes( attributes );
+
   QVariant value;
   QgsFeature f;
   QgsFeatureIterator it = layer->getFeatures( request );
@@ -56,7 +103,7 @@ std::tuple<QVariant::Type, int> QgsExpressionUtils::determineResultType( const Q
   {
     context.setFeature( f );
     const QVariant value = exp.evaluate( &context );
-    if ( !value.isNull() )
+    if ( !QgsVariantUtils::isNull( value ) )
     {
       return std::make_tuple( value.type(), value.userType() );
     }
@@ -65,5 +112,3 @@ std::tuple<QVariant::Type, int> QgsExpressionUtils::determineResultType( const Q
   value = QVariant();
   return std::make_tuple( value.type(), value.userType() );
 }
-
-

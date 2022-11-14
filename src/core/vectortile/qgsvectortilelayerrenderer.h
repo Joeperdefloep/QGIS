@@ -26,6 +26,8 @@ class QgsVectorTileLabelProvider;
 
 #include "qgsvectortilerenderer.h"
 #include "qgsmapclippingregion.h"
+#include "qgshttpheaders.h"
+#include "qgsvectortilematrixset.h"
 
 /**
  * \ingroup core
@@ -59,12 +61,8 @@ class QgsVectorTileLayerRenderer : public QgsMapLayerRenderer
     QString mSourcePath;
 
     QString mAuthCfg;
-    QString mReferer;
+    QgsHttpHeaders mHeaders;
 
-    //! Minimum zoom level at which source has any valid tiles (negative = unconstrained)
-    int mSourceMinZoom = -1;
-    //! Maximum zoom level at which source has any valid tiles (negative = unconstrained)
-    int mSourceMaxZoom = -1;
     //! Tile renderer object to do rendering of individual tiles
     std::unique_ptr<QgsVectorTileRenderer> mRenderer;
 
@@ -93,6 +91,9 @@ class QgsVectorTileLayerRenderer : public QgsMapLayerRenderer
     //! Cached list of layers required for renderer and labeling
     QSet< QString > mRequiredLayers;
 
+    //! Selected features, to draw on top in a selected style
+    QList< QgsFeature > mSelectedFeatures;
+
     //! Counter of total elapsed time to decode tiles (ms)
     int mTotalDecodeTime = 0;
     //! Counter of total elapsed time to render tiles (ms)
@@ -100,6 +101,9 @@ class QgsVectorTileLayerRenderer : public QgsMapLayerRenderer
 
     QList< QgsMapClippingRegion > mClippingRegions;
     double mLayerOpacity = 1.0;
+
+    QgsVectorTileMatrixSet mTileMatrixSet;
+
 };
 
 

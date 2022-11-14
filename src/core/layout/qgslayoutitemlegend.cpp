@@ -58,7 +58,17 @@ QgsLayoutItemLegend::QgsLayoutItemLegend( QgsLayout *layout )
     invalidateCache();
     update();
   } );
-  connect( mLegendModel.get(), &QgsLegendModel::refreshLegend, this, &QgsLayoutItemLegend::refresh );
+  connect( mLegendModel.get(), &QgsLegendModel::refreshLegend, this, [ = ]
+  {
+    // NOTE -- we do NOT connect to ::refresh here, as we don't want to trigger the call to onAtlasFeature() which sets mFilterAskedForUpdate to true,
+    // causing an endless loop.
+
+    // TODO -- the call to QgsLayoutItem::refresh() is probably NOT required!
+    QgsLayoutItem::refresh();
+
+    // (this one is definitely required)
+    clearLegendCachedData();
+  } );
 }
 
 QgsLayoutItemLegend *QgsLayoutItemLegend::create( QgsLayout *layout )
@@ -126,6 +136,8 @@ void QgsLayoutItemLegend::paint( QPainter *painter, const QStyleOptionGraphicsIt
   QgsLegendRenderer legendRenderer( mLegendModel.get(), mSettings );
   legendRenderer.setLegendSize( mForceResize && mSizeToContents ? QSize() : rect().size() );
 
+  const QPointF oldPos = pos();
+
   //adjust box if width or height is too small
   if ( mSizeToContents )
   {
@@ -156,7 +168,15 @@ void QgsLayoutItemLegend::paint( QPainter *painter, const QStyleOptionGraphicsIt
     }
   }
 
+  // attemptResize may change the legend position and would call setPos
+  // BUT the position is actually changed for the next draw, so we need to translate of the difference
+  // between oldPos and newPos
+  // the issue doesn't appear in desktop rendering but only in export because in the first one,
+  // Qt triggers a redraw on position change
+  painter->save();
+  painter->translate( pos() - oldPos );
   QgsLayoutItem::paint( painter, itemStyle, pWidget );
+  painter->restore();
 }
 
 void QgsLayoutItemLegend::finalizeRestoreFromXml()
@@ -1173,5 +1193,3 @@ void QgsLegendModel::forceRefresh()
 {
   emit refreshLegend();
 }
-
-

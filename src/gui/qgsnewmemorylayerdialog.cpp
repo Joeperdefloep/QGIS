@@ -28,6 +28,7 @@
 #include "qgsmemoryproviderutils.h"
 #include "qgsgui.h"
 #include "qgsiconutils.h"
+#include "qgsvariantutils.h"
 
 #include <QPushButton>
 #include <QComboBox>
@@ -82,14 +83,19 @@ QgsNewMemoryLayerDialog::QgsNewMemoryLayerDialog( QWidget *parent, Qt::WindowFla
   mCrsSelector->setEnabled( false );
   mCrsSelector->setShowAccuracyWarnings( true );
 
-  mTypeBox->addItem( QgsApplication::getThemeIcon( QStringLiteral( "/mIconFieldText.svg" ) ), tr( "Text" ), "string" );
-  mTypeBox->addItem( QgsApplication::getThemeIcon( QStringLiteral( "/mIconFieldInteger.svg" ) ), tr( "Whole Number" ), "integer" );
-  mTypeBox->addItem( QgsApplication::getThemeIcon( QStringLiteral( "/mIconFieldFloat.svg" ) ), tr( "Decimal Number" ), "double" );
-  mTypeBox->addItem( QgsApplication::getThemeIcon( QStringLiteral( "/mIconFieldBool.svg" ) ), tr( "Boolean" ), "bool" );
-  mTypeBox->addItem( QgsApplication::getThemeIcon( QStringLiteral( "/mIconFieldDate.svg" ) ), tr( "Date" ), "date" );
-  mTypeBox->addItem( QgsApplication::getThemeIcon( QStringLiteral( "/mIconFieldTime.svg" ) ), tr( "Time" ), "time" );
-  mTypeBox->addItem( QgsApplication::getThemeIcon( QStringLiteral( "/mIconFieldDateTime.svg" ) ), tr( "Date and Time" ), "datetime" );
-  mTypeBox->addItem( QgsApplication::getThemeIcon( QStringLiteral( "/mIconFieldBinary.svg" ) ), tr( "Binary (BLOB)" ), "binary" );
+  mTypeBox->addItem( QgsFields::iconForFieldType( QVariant::String ), QgsVariantUtils::typeToDisplayString( QVariant::String ), "string" );
+  mTypeBox->addItem( QgsFields::iconForFieldType( QVariant::Int ), QgsVariantUtils::typeToDisplayString( QVariant::Int ), "integer" );
+  mTypeBox->addItem( QgsFields::iconForFieldType( QVariant::Double ), QgsVariantUtils::typeToDisplayString( QVariant::Double ), "double" );
+  mTypeBox->addItem( QgsFields::iconForFieldType( QVariant::Bool ), QgsVariantUtils::typeToDisplayString( QVariant::Bool ), "bool" );
+  mTypeBox->addItem( QgsFields::iconForFieldType( QVariant::Date ), QgsVariantUtils::typeToDisplayString( QVariant::Date ), "date" );
+  mTypeBox->addItem( QgsFields::iconForFieldType( QVariant::Time ), QgsVariantUtils::typeToDisplayString( QVariant::Time ), "time" );
+  mTypeBox->addItem( QgsFields::iconForFieldType( QVariant::DateTime ), QgsVariantUtils::typeToDisplayString( QVariant::DateTime ), "datetime" );
+  mTypeBox->addItem( QgsFields::iconForFieldType( QVariant::ByteArray ), QgsVariantUtils::typeToDisplayString( QVariant::ByteArray ), "binary" );
+  mTypeBox->addItem( QgsFields::iconForFieldType( QVariant::StringList ), QgsVariantUtils::typeToDisplayString( QVariant::StringList ), "stringlist" );
+  mTypeBox->addItem( QgsFields::iconForFieldType( QVariant::List, QVariant::Int ), QgsVariantUtils::typeToDisplayString( QVariant::List, QVariant::Int ), "integerlist" );
+  mTypeBox->addItem( QgsFields::iconForFieldType( QVariant::List, QVariant::Double ), QgsVariantUtils::typeToDisplayString( QVariant::List, QVariant::Double ), "doublelist" );
+  mTypeBox->addItem( QgsFields::iconForFieldType( QVariant::List, QVariant::LongLong ), QgsVariantUtils::typeToDisplayString( QVariant::List, QVariant::LongLong ), "integer64list" );
+  mTypeBox->addItem( QgsFields::iconForFieldType( QVariant::Map ), QgsVariantUtils::typeToDisplayString( QVariant::Map ), "map" );
   mTypeBox_currentIndexChanged( 1 );
 
   mWidth->setValidator( new QIntValidator( 1, 255, this ) );
@@ -108,6 +114,9 @@ QgsNewMemoryLayerDialog::QgsNewMemoryLayerDialog( QWidget *parent, Qt::WindowFla
   connect( mAddAttributeButton, &QToolButton::clicked, this, &QgsNewMemoryLayerDialog::mAddAttributeButton_clicked );
   connect( mRemoveAttributeButton, &QToolButton::clicked, this, &QgsNewMemoryLayerDialog::mRemoveAttributeButton_clicked );
   connect( mButtonBox, &QDialogButtonBox::helpRequested, this, &QgsNewMemoryLayerDialog::showHelp );
+
+  mNameLineEdit->selectAll();
+  mNameLineEdit->setFocus();
 }
 
 QgsWkbTypes::Type QgsNewMemoryLayerDialog::selectedType() const
@@ -192,6 +201,11 @@ void QgsNewMemoryLayerDialog::mTypeBox_currentIndexChanged( int index )
       mPrecision->setEnabled( false );
       break;
     case 7: // Binary
+    case 8: // Stringlist
+    case 9: // Integerlist
+    case 10: // Doublelist
+    case 11: // Integer64list
+    case 12: // Map
       mWidth->clear();
       mWidth->setEnabled( false );
       mPrecision->clear();
@@ -241,6 +255,7 @@ QgsFields QgsNewMemoryLayerDialog::fields() const
     const int width = ( *it )->text( 2 ).toInt();
     const int precision = ( *it )->text( 3 ).toInt();
     QVariant::Type fieldType = QVariant::Invalid;
+    QVariant::Type fieldSubType = QVariant::Invalid;
     if ( typeName == QLatin1String( "string" ) )
       fieldType = QVariant::String;
     else if ( typeName == QLatin1String( "integer" ) )
@@ -255,8 +270,32 @@ QgsFields QgsNewMemoryLayerDialog::fields() const
       fieldType = QVariant::Time;
     else if ( typeName == QLatin1String( "datetime" ) )
       fieldType = QVariant::DateTime;
+    else if ( typeName == QLatin1String( "binary" ) )
+      fieldType = QVariant::ByteArray;
+    else if ( typeName == QLatin1String( "stringlist" ) )
+    {
+      fieldType = QVariant::StringList;
+      fieldSubType = QVariant::String;
+    }
+    else if ( typeName == QLatin1String( "integerlist" ) )
+    {
+      fieldType = QVariant::List;
+      fieldSubType = QVariant::Int;
+    }
+    else if ( typeName == QLatin1String( "doublelist" ) )
+    {
+      fieldType = QVariant::List;
+      fieldSubType = QVariant::Double;
+    }
+    else if ( typeName == QLatin1String( "integer64list" ) )
+    {
+      fieldType = QVariant::List;
+      fieldSubType = QVariant::LongLong;
+    }
+    else if ( typeName == QLatin1String( "map" ) )
+      fieldType = QVariant::Map;
 
-    const QgsField field = QgsField( name, fieldType, typeName, width, precision );
+    const QgsField field = QgsField( name, fieldType, typeName, width, precision, QString(), fieldSubType );
     fields.append( field );
     ++it;
   }

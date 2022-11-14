@@ -27,6 +27,8 @@ Utility class that encapsulates an action based on vector attributes.
       Windows,
       Unix,
       OpenUrl,
+      SubmitUrlEncoded,
+      SubmitUrlMultipart,
     };
 
     QgsAction();
@@ -221,6 +223,13 @@ Returns an expression context scope used for running the action.
 Returns an HTML table with the basic information about this action.
 
 .. versionadded:: 3.24
+%End
+
+    void setCommand( const QString &newCommand );
+%Docstring
+Sets the action ``command``.
+
+.. versionadded:: 3.26
 %End
 
 };

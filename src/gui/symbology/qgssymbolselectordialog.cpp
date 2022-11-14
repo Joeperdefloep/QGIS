@@ -25,14 +25,7 @@
 // the widgets
 #include "qgssymbolslistwidget.h"
 #include "qgslayerpropertieswidget.h"
-#include "qgssymbollayerwidget.h"
-#include "qgsellipsesymbollayerwidget.h"
-#include "qgsvectorfieldsymbollayerwidget.h"
-
-#include "qgslogger.h"
 #include "qgsapplication.h"
-#include "qgssettings.h"
-#include "qgsfeatureiterator.h"
 #include "qgsvectorlayer.h"
 #include "qgssvgcache.h"
 #include "qgsimagecache.h"
@@ -40,7 +33,6 @@
 #include "qgsguiutils.h"
 #include "qgsgui.h"
 #include "qgsmarkersymbol.h"
-#include "qgsfillsymbol.h"
 #include "qgslinesymbol.h"
 
 #include <QColorDialog>
@@ -125,12 +117,14 @@ void DataDefinedRestorer::restore()
 class SymbolLayerItem : public QStandardItem
 {
   public:
-    explicit SymbolLayerItem( QgsSymbolLayer *layer, Qgis::SymbolType symbolType )
+    explicit SymbolLayerItem( QgsSymbolLayer *layer, Qgis::SymbolType symbolType, QgsVectorLayer *vectorLayer )
+      : mVectorLayer( vectorLayer )
     {
       setLayer( layer, symbolType );
     }
 
-    explicit SymbolLayerItem( QgsSymbol *symbol )
+    explicit SymbolLayerItem( QgsSymbol *symbol, QgsVectorLayer *vectorLayer )
+      : mVectorLayer( vectorLayer )
     {
       setSymbol( symbol );
     }
@@ -161,9 +155,13 @@ class SymbolLayerItem : public QStandardItem
       }
       QIcon icon;
       if ( mIsLayer )
-        icon = QgsSymbolLayerUtils::symbolLayerPreviewIcon( mLayer, QgsUnitTypes::RenderMillimeters, mSize, QgsMapUnitScale(), mSymbol ? mSymbol->type() : mSymbolType ); //todo: make unit a parameter
+        icon = QgsSymbolLayerUtils::symbolLayerPreviewIcon( mLayer, QgsUnitTypes::RenderMillimeters, mSize, QgsMapUnitScale(), mSymbol ? mSymbol->type() : mSymbolType, mVectorLayer ); //todo: make unit a parameter
       else
-        icon = QgsSymbolLayerUtils::symbolPreviewIcon( mSymbol, mSize );
+      {
+        QgsExpressionContext expContext;
+        expContext.appendScopes( QgsExpressionContextUtils::globalProjectLayerScopes( mVectorLayer ) );
+        icon = QIcon( QgsSymbolLayerUtils::symbolPreviewPixmap( mSymbol, mSize, 0, nullptr, false, &expContext, nullptr ) );
+      }
       setIcon( icon );
 
       if ( auto *lParent = parent() )
@@ -189,7 +187,13 @@ class SymbolLayerItem : public QStandardItem
       if ( role == Qt::DisplayRole || role == Qt::EditRole )
       {
         if ( mIsLayer )
-          return QgsApplication::symbolLayerRegistry()->symbolLayerMetadata( mLayer->layerType() )->visibleName();
+        {
+          QgsSymbolLayerAbstractMetadata *m = QgsApplication::symbolLayerRegistry()->symbolLayerMetadata( mLayer->layerType() );
+          if ( m )
+            return m->visibleName();
+          else
+            return QString();
+        }
         else
         {
           switch ( mSymbol->type() )
@@ -207,12 +211,17 @@ class SymbolLayerItem : public QStandardItem
       }
       else if ( role == Qt::ForegroundRole && mIsLayer )
       {
-        QBrush brush( Qt::black, Qt::SolidPattern );
         if ( !mLayer->enabled() )
         {
-          brush.setColor( Qt::lightGray );
+          QPalette pal = qApp->palette();
+          QBrush brush = QStandardItem::data( role ).value< QBrush >();
+          brush.setColor( pal.color( QPalette::Disabled, QPalette::WindowText ) );
+          return brush;
         }
-        return brush;
+        else
+        {
+          return QVariant();
+        }
       }
 
 //      if ( role == Qt::SizeHintRole )
@@ -225,7 +234,8 @@ class SymbolLayerItem : public QStandardItem
   protected:
     QgsSymbolLayer *mLayer = nullptr;
     QgsSymbol *mSymbol = nullptr;
-    bool mIsLayer;
+    QPointer< QgsVectorLayer > mVectorLayer;
+    bool mIsLayer = false;
     QSize mSize;
     Qgis::SymbolType mSymbolType = Qgis::SymbolType::Hybrid;
 };
@@ -381,7 +391,7 @@ void QgsSymbolSelectorWidget::loadSymbol( QgsSymbol *symbol, SymbolLayerItem *pa
     parent = static_cast<SymbolLayerItem *>( mSymbolLayersModel->invisibleRootItem() );
   }
 
-  SymbolLayerItem *symbolItem = new SymbolLayerItem( symbol );
+  SymbolLayerItem *symbolItem = new SymbolLayerItem( symbol, mVectorLayer );
   QFont boldFont = symbolItem->font();
   boldFont.setBold( true );
   symbolItem->setFont( boldFont );
@@ -390,7 +400,7 @@ void QgsSymbolSelectorWidget::loadSymbol( QgsSymbol *symbol, SymbolLayerItem *pa
   const int count = symbol->symbolLayerCount();
   for ( int i = count - 1; i >= 0; i-- )
   {
-    SymbolLayerItem *layerItem = new SymbolLayerItem( symbol->symbolLayer( i ), symbol->type() );
+    SymbolLayerItem *layerItem = new SymbolLayerItem( symbol->symbolLayer( i ), symbol->type(), mVectorLayer );
     layerItem->setEditable( false );
     symbolItem->appendRow( layerItem );
     if ( symbol->symbolLayer( i )->subSymbol() )
@@ -603,7 +613,7 @@ void QgsSymbolSelectorWidget::addLayer()
                              ? static_cast<QgsLineSymbol *>( parentSymbol )->dataDefinedWidth()
                              : QgsProperty() );
 
-  QgsSymbolLayer *newLayer = QgsApplication::symbolLayerRegistry()->defaultSymbolLayer( parentSymbol->type() );
+  QgsSymbolLayer *newLayer = QgsSymbolLayerRegistry::defaultSymbolLayer( parentSymbol->type() );
   if ( insertIdx == -1 )
     parentSymbol->appendSymbolLayer( newLayer );
   else
@@ -617,7 +627,7 @@ void QgsSymbolSelectorWidget::addLayer()
   if ( ddWidth )
     static_cast<QgsLineSymbol *>( parentSymbol )->setDataDefinedWidth( ddWidth );
 
-  SymbolLayerItem *newLayerItem = new SymbolLayerItem( newLayer, parentSymbol->type() );
+  SymbolLayerItem *newLayerItem = new SymbolLayerItem( newLayer, parentSymbol->type(), mVectorLayer );
   item->insertRow( insertIdx == -1 ? 0 : insertIdx, newLayerItem );
   item->updatePreview();
 
@@ -716,7 +726,7 @@ void QgsSymbolSelectorWidget::duplicateLayer()
   else
     parentSymbol->insertSymbolLayer( item->rowCount() - insertIdx, newLayer );
 
-  SymbolLayerItem *newLayerItem = new SymbolLayerItem( newLayer, parentSymbol->type() );
+  SymbolLayerItem *newLayerItem = new SymbolLayerItem( newLayer, parentSymbol->type(), mVectorLayer );
   item->insertRow( insertIdx == -1 ? 0 : insertIdx, newLayerItem );
   if ( newLayer->subSymbol() )
   {
@@ -779,7 +789,7 @@ QgsSymbolSelectorDialog::QgsSymbolSelectorDialog( QgsSymbol *symbol, QgsStyle *s
 
   mSelectorWidget->setMinimumSize( 460, 560 );
   setObjectName( QStringLiteral( "SymbolSelectorDialog" ) );
-  QgsGui::instance()->enableAutoGeometryRestore( this );
+  QgsGui::enableAutoGeometryRestore( this );
 
   // Can be embedded in renderer properties dialog
   if ( embedded )

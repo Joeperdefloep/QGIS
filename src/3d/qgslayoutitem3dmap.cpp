@@ -132,6 +132,19 @@ void QgsLayoutItem3DMap::draw( QgsLayoutItemRenderContext &context )
   {
     painter->drawText( r, Qt::AlignCenter, tr( "Loading" ) );
     painter->restore();
+    if ( mSettings->rendererUsage() != Qgis::RendererUsage::View )
+    {
+      mSettings->setRendererUsage( Qgis::RendererUsage::View );
+      mEngine.reset(); //we need to rebuild the scene to force the render again
+    }
+  }
+  else
+  {
+    if ( mSettings->rendererUsage() != Qgis::RendererUsage::Export )
+    {
+      mSettings->setRendererUsage( Qgis::RendererUsage::Export );
+      mEngine.reset(); //we need to rebuild the scene to force the render again
+    }
   }
 
   QSizeF sizePixels = mLayout->renderContext().measurementConverter().convert( sizeWithUnits(), QgsUnitTypes::LayoutPixels ).toQSizeF();
@@ -170,10 +183,16 @@ void QgsLayoutItem3DMap::draw( QgsLayoutItemRenderContext &context )
     if ( mDrawing )
       return;
     mDrawing = true;
+    disconnect( mEngine.get(), &QgsAbstract3DEngine::imageCaptured, this, &QgsLayoutItem3DMap::onImageCaptured );
+    disconnect( mScene, &Qgs3DMapScene::sceneStateChanged, this, &QgsLayoutItem3DMap::onSceneStateChanged );
+
     Qgs3DUtils::captureSceneImage( *mEngine.get(), mScene );
     QImage img = Qgs3DUtils::captureSceneImage( *mEngine.get(), mScene );
     painter->drawImage( r, img );
     painter->restore();
+
+    connect( mEngine.get(), &QgsAbstract3DEngine::imageCaptured, this, &QgsLayoutItem3DMap::onImageCaptured );
+    connect( mScene, &Qgs3DMapScene::sceneStateChanged, this, &QgsLayoutItem3DMap::onSceneStateChanged );
     mDrawing = false;
   }
 }

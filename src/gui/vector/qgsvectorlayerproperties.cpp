@@ -72,6 +72,7 @@
 #include "qgsvectorlayertemporalpropertieswidget.h"
 #include "qgsprovidersourcewidgetproviderregistry.h"
 #include "qgsprovidersourcewidget.h"
+#include "qgsproviderregistry.h"
 
 #include "layertree/qgslayertreelayer.h"
 #include "qgslayertree.h"
@@ -133,27 +134,17 @@ QgsVectorLayerProperties::QgsVectorLayerProperties(
 
   mBtnStyle = new QPushButton( tr( "Style" ), this );
   QMenu *menuStyle = new QMenu( this );
-  mActionLoadStyle = menuStyle->addAction( tr( "Load Style…" ) );
+  mActionLoadStyle = new QAction( tr( "Load Style…" ), this );
   connect( mActionLoadStyle, &QAction::triggered, this, &QgsVectorLayerProperties::loadStyle );
 
-  // If we have multiple styles, offer an option to save them at once
-  if ( lyr->styleManager()->styles().count() > 1 )
-  {
-    mActionSaveStyle = menuStyle->addAction( tr( "Save Current Style…" ) );
-    mActionSaveMultipleStyles = menuStyle->addAction( tr( "Save All Styles…" ) );
-    connect( mActionSaveMultipleStyles, &QAction::triggered, this, &QgsVectorLayerProperties::saveMultipleStylesAs );
-  }
-  else
-  {
-    mActionSaveStyle = menuStyle->addAction( tr( "Save Style…" ) );
-  }
+  mActionSaveStyle = new QAction( tr( "Save Current Style…" ), this );
   connect( mActionSaveStyle, &QAction::triggered, this, &QgsVectorLayerProperties::saveStyleAs );
+
+  mActionSaveMultipleStyles = new QAction( tr( "Save Multiple Styles…" ), this );
+  connect( mActionSaveMultipleStyles, &QAction::triggered, this, &QgsVectorLayerProperties::saveMultipleStylesAs );
 
   mSourceGroupBox->hide();
 
-  menuStyle->addSeparator();
-  menuStyle->addAction( tr( "Save as Default" ), this, &QgsVectorLayerProperties::saveDefaultStyle_clicked );
-  menuStyle->addAction( tr( "Restore Default" ), this, &QgsVectorLayerProperties::loadDefaultStyle_clicked );
   mBtnStyle->setMenu( menuStyle );
   connect( menuStyle, &QMenu::aboutToShow, this, &QgsVectorLayerProperties::aboutToShowStyleMenu );
   buttonBox->addButton( mBtnStyle, QDialogButtonBox::ResetRole );
@@ -463,6 +454,7 @@ QgsVectorLayerProperties::QgsVectorLayerProperties(
   mOptsPage_Actions->setProperty( "helpPage", QStringLiteral( "working_with_vector/vector_properties.html#actions-properties" ) );
   mOptsPage_Display->setProperty( "helpPage", QStringLiteral( "working_with_vector/vector_properties.html#display-properties" ) );
   mOptsPage_Rendering->setProperty( "helpPage", QStringLiteral( "working_with_vector/vector_properties.html#rendering-properties" ) );
+  mOptsPage_Temporal->setProperty( "helpPage", QStringLiteral( "working_with_vector/vector_properties.html#temporal-properties" ) );
   mOptsPage_Variables->setProperty( "helpPage", QStringLiteral( "working_with_vector/vector_properties.html#variables-properties" ) );
   mOptsPage_Metadata->setProperty( "helpPage", QStringLiteral( "working_with_vector/vector_properties.html#metadata-properties" ) );
   mOptsPage_DataDependencies->setProperty( "helpPage", QStringLiteral( "working_with_vector/vector_properties.html#dependencies-properties" ) ) ;
@@ -557,7 +549,7 @@ void QgsVectorLayerProperties::syncToLayer()
 
   // populate the general information
   mLayerOrigNameLineEdit->setText( mLayer->name() );
-
+  mBackupCrs = mLayer->crs();
   //see if we are dealing with a pg layer here
   mSubsetGroupBox->setEnabled( true );
   txtSubsetSQL->setText( mLayer->subsetString() );
@@ -691,7 +683,7 @@ void QgsVectorLayerProperties::apply()
   {
     labelingDialog->writeSettingsToLayer();
   }
-
+  mBackupCrs = mLayer->crs();
   // apply legend settings
   mLegendWidget->applyToLayer();
   mLegendConfigEmbeddedWidget->applyToLayer();
@@ -917,13 +909,16 @@ void QgsVectorLayerProperties::onCancel()
     doc.setContent( mOldStyle.xmlData(), false, &myMessage, &errorLine, &errorColumn );
     mLayer->importNamedStyle( doc, myMessage );
   }
+
+  if ( mBackupCrs != mLayer->crs() )
+    mLayer->setCrs( mBackupCrs );
 }
 
 void QgsVectorLayerProperties::urlClicked( const QUrl &url )
 {
   QFileInfo file( url.toLocalFile() );
   if ( file.exists() && !file.isDir() )
-    QgsGui::instance()->nativePlatformInterface()->openFileExplorerAndSelectFile( url.toLocalFile() );
+    QgsGui::nativePlatformInterface()->openFileExplorerAndSelectFile( url.toLocalFile() );
   else
     QDesktopServices::openUrl( url );
 }
@@ -979,6 +974,7 @@ QString QgsVectorLayerProperties::htmlMetadata()
 
 void QgsVectorLayerProperties::mCrsSelector_crsChanged( const QgsCoordinateReferenceSystem &crs )
 {
+
   QgsDatumTransformDialog::run( crs, QgsProject::instance()->crs(), this, mCanvas, tr( "Select Transformation for the vector layer" ) );
   mLayer->setCrs( crs );
   mMetadataFilled = false;
@@ -1065,19 +1061,42 @@ void QgsVectorLayerProperties::saveDefaultStyle_clicked()
       case 0:
         return;
       case 2:
+      {
+        QString errorMessage;
+        if ( QgsProviderRegistry::instance()->styleExists( mLayer->providerType(), mLayer->source(), QString(), errorMessage ) )
+        {
+          if ( QMessageBox::question( nullptr, QObject::tr( "Save style in database" ),
+                                      QObject::tr( "A matching style already exists in the database for this layer. Do you want to overwrite it?" ),
+                                      QMessageBox::Yes | QMessageBox::No ) == QMessageBox::No )
+          {
+            return;
+          }
+        }
+        else if ( !errorMessage.isEmpty() )
+        {
+          QMessageBox::warning( nullptr, QObject::tr( "Save style in database" ),
+                                errorMessage );
+          return;
+        }
+
         mLayer->saveStyleToDatabase( QString(), QString(), true, QString(), errorMsg );
         if ( errorMsg.isNull() )
         {
           return;
         }
         break;
+      }
       default:
         break;
     }
   }
 
   bool defaultSavedFlag = false;
+  // TODO Once the deprecated `saveDefaultStyle()` method is gone, just
+  // remove the NOWARN_DEPRECATED tags
+  Q_NOWARN_DEPRECATED_PUSH
   errorMsg = mLayer->saveDefaultStyle( defaultSavedFlag );
+  Q_NOWARN_DEPRECATED_POP
   if ( !defaultSavedFlag )
   {
     QMessageBox::warning( this, tr( "Default Style" ), errorMsg );
@@ -1199,6 +1218,7 @@ void QgsVectorLayerProperties::saveStyleAs()
     apply();
 
     bool defaultLoadedFlag = false;
+    QString errorMessage;
 
     StyleType type = dlg.currentStyleType();
     switch ( type )
@@ -1206,12 +1226,11 @@ void QgsVectorLayerProperties::saveStyleAs()
       case QML:
       case SLD:
       {
-        QString message;
         QString filePath = dlg.outputFilePath();
         if ( type == QML )
-          message = mLayer->saveNamedStyle( filePath, defaultLoadedFlag, dlg.styleCategories() );
+          errorMessage = mLayer->saveNamedStyle( filePath, defaultLoadedFlag, dlg.styleCategories() );
         else
-          message = mLayer->saveSldStyle( filePath, defaultLoadedFlag );
+          errorMessage = mLayer->saveSldStyle( filePath, defaultLoadedFlag );
 
         //reset if the default style was loaded OK only
         if ( defaultLoadedFlag )
@@ -1221,7 +1240,7 @@ void QgsVectorLayerProperties::saveStyleAs()
         else
         {
           //let the user know what went wrong
-          QMessageBox::information( this, tr( "Save Style" ), message );
+          QMessageBox::information( this, tr( "Save Style" ), errorMessage );
         }
 
         break;
@@ -1229,15 +1248,43 @@ void QgsVectorLayerProperties::saveStyleAs()
       case DB:
       {
         QString infoWindowTitle = QObject::tr( "Save style to DB (%1)" ).arg( mLayer->providerType() );
-        QString msgError;
 
         QgsVectorLayerSaveStyleDialog::SaveToDbSettings dbSettings = dlg.saveToDbSettings();
 
-        mLayer->saveStyleToDatabase( dbSettings.name, dbSettings.description, dbSettings.isDefault, dbSettings.uiFileContent, msgError );
-
-        if ( !msgError.isNull() )
+        if ( QgsProviderRegistry::instance()->styleExists( mLayer->providerType(), mLayer->source(), dbSettings.name, errorMessage ) )
         {
-          mMessageBar->pushMessage( infoWindowTitle, msgError, Qgis::MessageLevel::Warning );
+          if ( QMessageBox::question( nullptr, QObject::tr( "Save style in database" ),
+                                      QObject::tr( "A matching style already exists in the database for this layer. Do you want to overwrite it?" ),
+                                      QMessageBox::Yes | QMessageBox::No ) == QMessageBox::No )
+          {
+            return;
+          }
+        }
+        else if ( !errorMessage.isEmpty() )
+        {
+          mMessageBar->pushMessage( infoWindowTitle, errorMessage, Qgis::MessageLevel::Warning );
+          return;
+        }
+
+        mLayer->saveStyleToDatabase( dbSettings.name, dbSettings.description, dbSettings.isDefault, dbSettings.uiFileContent, errorMessage, dlg.styleCategories() );
+
+        if ( !errorMessage.isNull() )
+        {
+          mMessageBar->pushMessage( infoWindowTitle, errorMessage, Qgis::MessageLevel::Warning );
+        }
+        else
+        {
+          mMessageBar->pushMessage( infoWindowTitle, tr( "Style saved" ), Qgis::MessageLevel::Success );
+        }
+        break;
+      }
+      case Local:
+      {
+        QString infoWindowTitle = tr( "Save default style to local database" );
+        errorMessage = mLayer->saveDefaultStyle( defaultLoadedFlag, dlg.styleCategories() );
+        if ( !defaultLoadedFlag )
+        {
+          mMessageBar->pushMessage( infoWindowTitle, errorMessage, Qgis::MessageLevel::Warning );
         }
         else
         {
@@ -1346,7 +1393,24 @@ void QgsVectorLayerProperties::saveMultipleStylesAs()
                 i++;
               }
             }
-            mLayer->saveStyleToDatabase( name, dbSettings.description, dbSettings.isDefault, dbSettings.uiFileContent, msgError );
+
+            QString errorMessage;
+            if ( QgsProviderRegistry::instance()->styleExists( mLayer->providerType(), mLayer->source(), dbSettings.name, errorMessage ) )
+            {
+              if ( QMessageBox::question( nullptr, QObject::tr( "Save style in database" ),
+                                          QObject::tr( "A matching style already exists in the database for this layer. Do you want to overwrite it?" ),
+                                          QMessageBox::Yes | QMessageBox::No ) == QMessageBox::No )
+              {
+                return;
+              }
+            }
+            else if ( !errorMessage.isEmpty() )
+            {
+              mMessageBar->pushMessage( infoWindowTitle, errorMessage, Qgis::MessageLevel::Warning );
+              return;
+            }
+
+            mLayer->saveStyleToDatabase( name, dbSettings.description, dbSettings.isDefault, dbSettings.uiFileContent, msgError, dlg.styleCategories() );
 
             if ( !msgError.isNull() )
             {
@@ -1359,6 +1423,8 @@ void QgsVectorLayerProperties::saveMultipleStylesAs()
             }
             break;
           }
+          case Local:
+            break;
         }
         styleIndex ++;
       }
@@ -1372,8 +1438,26 @@ void QgsVectorLayerProperties::aboutToShowStyleMenu()
 {
   // this should be unified with QgsRasterLayerProperties::aboutToShowStyleMenu()
   QMenu *m = qobject_cast<QMenu *>( sender() );
+  m->clear();
 
-  QgsMapLayerStyleGuiUtils::instance()->removesExtraMenuSeparators( m );
+  m->addAction( mActionLoadStyle );
+  m->addAction( mActionSaveStyle );
+
+  // If we have multiple styles, offer an option to save them at once
+  if ( mLayer->styleManager()->styles().count() > 1 )
+  {
+    mActionSaveStyle->setText( tr( "Save Current Style…" ) );
+    m->addAction( mActionSaveMultipleStyles );
+  }
+  else
+  {
+    mActionSaveStyle->setText( tr( "Save Style…" ) );
+  }
+
+  m->addSeparator();
+  m->addAction( tr( "Save as Default" ), this, &QgsVectorLayerProperties::saveDefaultStyle_clicked );
+  m->addAction( tr( "Restore Default" ), this, &QgsVectorLayerProperties::loadDefaultStyle_clicked );
+
   // re-add style manager actions!
   m->addSeparator();
   QgsMapLayerStyleGuiUtils::instance()->addStyleManagerActions( m, mLayer );
@@ -1388,7 +1472,7 @@ void QgsVectorLayerProperties::loadStyle()
 
   //get the list of styles in the db
   int sectionLimit = mLayer->listStylesInDatabase( ids, names, descriptions, errorMsg );
-  QgsMapLayerLoadStyleDialog dlg( mLayer );
+  QgsMapLayerLoadStyleDialog dlg( mLayer, this );
   dlg.initializeLists( ids, names, descriptions, sectionLimit );
 
   if ( dlg.exec() )
@@ -1396,21 +1480,20 @@ void QgsVectorLayerProperties::loadStyle()
     mOldStyle = mLayer->styleManager()->style( mLayer->styleManager()->currentStyle() );
     QgsMapLayer::StyleCategories categories = dlg.styleCategories();
     StyleType type = dlg.currentStyleType();
+    bool defaultLoadedFlag = false;
     switch ( type )
     {
       case QML:
       case SLD:
       {
-        QString message;
-        bool defaultLoadedFlag = false;
         QString filePath = dlg.filePath();
         if ( type == SLD )
         {
-          message = mLayer->loadSldStyle( filePath, defaultLoadedFlag );
+          errorMsg = mLayer->loadSldStyle( filePath, defaultLoadedFlag );
         }
         else
         {
-          message = mLayer->loadNamedStyle( filePath, defaultLoadedFlag, true, categories );
+          errorMsg = mLayer->loadNamedStyle( filePath, defaultLoadedFlag, true, categories );
         }
         //reset if the default style was loaded OK only
         if ( defaultLoadedFlag )
@@ -1420,7 +1503,7 @@ void QgsVectorLayerProperties::loadStyle()
         else
         {
           //let the user know what went wrong
-          QMessageBox::warning( this, tr( "Load Style" ), message );
+          QMessageBox::warning( this, tr( "Load Style" ), errorMsg );
         }
         break;
       }
@@ -1447,6 +1530,20 @@ void QgsVectorLayerProperties::loadStyle()
           QMessageBox::warning( this, tr( "Load Styles from Database" ),
                                 tr( "The retrieved style is not a valid named style. Error message: %1" )
                                 .arg( errorMsg ) );
+        }
+        break;
+      }
+      case Local:
+      {
+        errorMsg = mLayer->loadNamedStyle( mLayer->styleURI(), defaultLoadedFlag, true, categories );
+        //reset if the default style was loaded OK only
+        if ( defaultLoadedFlag )
+        {
+          syncToLayer();
+        }
+        else
+        {
+          QMessageBox::warning( this, tr( "Load Default Style" ), errorMsg );
         }
         break;
       }

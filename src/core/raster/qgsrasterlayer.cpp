@@ -59,6 +59,8 @@ email                : tim at linfiniti.com
 #include "qgsruntimeprofiler.h"
 #include "qgsmaplayerfactory.h"
 #include "qgsrasterpipe.h"
+#include "qgsrasterlayerelevationproperties.h"
+#include "qgsrasterlayerprofilegenerator.h"
 
 #include <cmath>
 #include <cstdio>
@@ -107,8 +109,8 @@ QgsRasterLayer::QgsRasterLayer()
   , QSTRING_NOT_SET( QStringLiteral( "Not Set" ) )
   , TRSTRING_NOT_SET( tr( "Not Set" ) )
   , mTemporalProperties( new QgsRasterLayerTemporalProperties( this ) )
+  , mElevationProperties( new QgsRasterLayerElevationProperties( this ) )
   , mPipe( std::make_unique< QgsRasterPipe >() )
-
 {
   init();
   setValid( false );
@@ -123,6 +125,7 @@ QgsRasterLayer::QgsRasterLayer( const QString &uri,
   , QSTRING_NOT_SET( QStringLiteral( "Not Set" ) )
   , TRSTRING_NOT_SET( tr( "Not Set" ) )
   , mTemporalProperties( new QgsRasterLayerTemporalProperties( this ) )
+  , mElevationProperties( new QgsRasterLayerElevationProperties( this ) )
   , mPipe( std::make_unique< QgsRasterPipe >() )
 {
   mShouldValidateCrs = !options.skipCrsValidation;
@@ -136,6 +139,7 @@ QgsRasterLayer::QgsRasterLayer( const QString &uri,
   {
     providerFlags |= QgsDataProvider::FlagLoadDefaultStyle;
   }
+
   setDataSource( uri, baseName, providerKey, providerOptions, providerFlags );
 
   if ( isValid() )
@@ -162,6 +166,9 @@ QgsRasterLayer *QgsRasterLayer::clone() const
   }
   QgsRasterLayer *layer = new QgsRasterLayer( source(), name(), mProviderKey, options );
   QgsMapLayer::clone( layer );
+  layer->mElevationProperties = mElevationProperties->clone();
+  layer->mElevationProperties->setParent( layer );
+  layer->setMapTipTemplate( mapTipTemplate() );
 
   // do not clone data provider which is the first element in pipe
   for ( int i = 1; i < mPipe->size(); i++ )
@@ -172,6 +179,14 @@ QgsRasterLayer *QgsRasterLayer::clone() const
   layer->pipe()->setDataDefinedProperties( mPipe->dataDefinedProperties() );
 
   return layer;
+}
+
+QgsAbstractProfileGenerator *QgsRasterLayer::createProfileGenerator( const QgsProfileRequest &request )
+{
+  if ( !mElevationProperties->isEnabled() )
+    return nullptr;
+
+  return new QgsRasterLayerProfileGenerator( this, request );
 }
 
 //////////////////////////////////////////////////////////
@@ -234,6 +249,34 @@ QString QgsRasterLayer::bandName( int bandNo ) const
 {
   if ( !mDataProvider ) return QString();
   return mDataProvider->generateBandName( bandNo );
+}
+
+QgsRasterAttributeTable *QgsRasterLayer::attributeTable( int bandNoInt ) const
+{
+  if ( !mDataProvider )
+    return nullptr;
+  return mDataProvider->attributeTable( bandNoInt );
+}
+
+int QgsRasterLayer::attributeTableCount() const
+{
+  if ( !mDataProvider )
+    return 0;
+
+  int ratCount { 0 };
+  for ( int bandNo = 1; bandNo <= bandCount(); ++bandNo )
+  {
+    if ( attributeTable( bandNo ) )
+    {
+      ratCount++;
+    }
+  }
+  return ratCount;
+}
+
+bool QgsRasterLayer::canCreateRasterAttributeTable()
+{
+  return mDataProvider && renderer() && renderer()->canCreateRasterAttributeTable();
 }
 
 void QgsRasterLayer::setRendererForDrawingStyle( QgsRaster::DrawingStyle drawingStyle )
@@ -444,9 +487,9 @@ QString QgsRasterLayer::htmlMetadata() const
       myMetadata += tr( "n/a" );
     myMetadata += QLatin1String( "</td>" );
 
-    if ( provider->hasStatistics( i, QgsRasterBandStats::Min | QgsRasterBandStats::Max, provider->extent(), SAMPLE_SIZE ) )
+    if ( provider->hasStatistics( i, QgsRasterBandStats::Min | QgsRasterBandStats::Max, provider->extent(), static_cast<int>( SAMPLE_SIZE ) ) )
     {
-      const QgsRasterBandStats myRasterBandStats = provider->bandStatistics( i, QgsRasterBandStats::Min | QgsRasterBandStats::Max, provider->extent(), SAMPLE_SIZE );
+      const QgsRasterBandStats myRasterBandStats = provider->bandStatistics( i, QgsRasterBandStats::Min | QgsRasterBandStats::Max, provider->extent(), static_cast<int>( SAMPLE_SIZE ) );
       myMetadata += QStringLiteral( "<td>" ) % QString::number( myRasterBandStats.minimumValue, 'f', 10 ) % QStringLiteral( "</td>" ) %
                     QStringLiteral( "<td>" ) % QString::number( myRasterBandStats.maximumValue, 'f', 10 ) % QStringLiteral( "</td>" );
     }
@@ -478,6 +521,16 @@ QString QgsRasterLayer::htmlMetadata() const
 
                  QStringLiteral( "\n</body>\n</html>\n" );
   return myMetadata;
+}
+
+Qgis::MapLayerProperties QgsRasterLayer::properties() const
+{
+  Qgis::MapLayerProperties res;
+  if ( mDataProvider && ( mDataProvider->flags() & Qgis::DataProviderFlag::IsBasemapSource ) )
+  {
+    res |= Qgis::MapLayerProperty::IsBasemapLayer;
+  }
+  return res;
 }
 
 QPixmap QgsRasterLayer::paletteAsPixmap( int bandNumber )
@@ -599,7 +652,8 @@ void QgsRasterLayer::setDataProvider( QString const &provider, const QgsDataProv
   QgsDebugMsgLevel( QStringLiteral( "Entered" ), 4 );
   setValid( false ); // assume the layer is invalid until we determine otherwise
 
-  mPipe->remove( mDataProvider ); // deletes if exists
+  // deletes pipe elements (including data provider)
+  mPipe = std::make_unique< QgsRasterPipe >();
   mDataProvider = nullptr;
 
   // XXX should I check for and possibly delete any pre-existing providers?
@@ -697,11 +751,8 @@ void QgsRasterLayer::setDataProvider( QString const &provider, const QgsDataProv
   {
     mRasterType = ColorLayer;
   }
-  else if ( mDataProvider->colorInterpretation( 1 ) == QgsRaster::PaletteIndex )
-  {
-    mRasterType = Palette;
-  }
-  else if ( mDataProvider->colorInterpretation( 1 ) == QgsRaster::ContinuousPalette )
+  else if ( mDataProvider->colorInterpretation( 1 ) == QgsRaster::PaletteIndex
+            || mDataProvider->colorInterpretation( 1 ) == QgsRaster::ContinuousPalette )
   {
     mRasterType = Palette;
   }
@@ -711,6 +762,41 @@ void QgsRasterLayer::setDataProvider( QString const &provider, const QgsDataProv
   }
 
   QgsDebugMsgLevel( "mRasterType = " + QString::number( mRasterType ), 4 );
+
+  // Raster Attribute Table logic to load from provider or same basename + vat.dbf file.
+  QString errorMessage;
+  bool hasRat { mDataProvider->readNativeAttributeTable( &errorMessage ) };
+  if ( ! hasRat )
+  {
+    errorMessage.clear();
+    QgsDebugMsgLevel( "Native Raster Raster Attribute Table read failed " + errorMessage, 2 );
+    if ( QFile::exists( mDataProvider->dataSourceUri( ) +  ".vat.dbf" ) )
+    {
+      std::unique_ptr<QgsRasterAttributeTable> rat = std::make_unique<QgsRasterAttributeTable>();
+      hasRat = rat->readFromFile( mDataProvider->dataSourceUri( ) +  ".vat.dbf", &errorMessage );
+      if ( hasRat )
+      {
+        if ( rat->isValid( &errorMessage ) )
+        {
+          mDataProvider->setAttributeTable( 1, rat.release() );
+          QgsDebugMsgLevel( "DBF Raster Attribute Table successfully read from " + mDataProvider->dataSourceUri( ) +  ".vat.dbf", 2 );
+        }
+        else
+        {
+          QgsDebugMsgLevel( "DBF Raster Attribute Table is not valid, skipping: " + errorMessage, 2 );
+        }
+      }
+      else
+      {
+        QgsDebugMsgLevel( "DBF Raster Attribute Table read failed " + errorMessage, 2 );
+      }
+    }
+  }
+  else
+  {
+    QgsDebugMsgLevel( "Native Raster Attribute Table read success", 2 );
+  }
+
   if ( mRasterType == ColorLayer )
   {
     QgsDebugMsgLevel( "Setting drawing style to SingleBandColorDataStyle " + QString::number( QgsRaster::SingleBandColorDataStyle ), 4 );
@@ -946,6 +1032,69 @@ void QgsRasterLayer::setDataSourcePrivate( const QString &dataSource, const QStr
   }
 }
 
+void QgsRasterLayer::writeRasterAttributeTableExternalPaths( QDomNode &layerNode, QDomDocument &doc, const QgsReadWriteContext &context ) const
+{
+  if ( attributeTableCount() > 0 )
+  {
+    QDomElement elem = doc.createElement( QStringLiteral( "FileBasedAttributeTables" ) );
+    for ( int bandNo = 1; bandNo <= bandCount(); bandNo++ )
+    {
+      if ( QgsRasterAttributeTable *rat = attributeTable( bandNo ); rat && ! rat->filePath().isEmpty() )
+      {
+        QDomElement ratElem = doc.createElement( QStringLiteral( "AttributeTable" ) );
+        ratElem.setAttribute( QStringLiteral( "band" ), bandNo );
+        ratElem.setAttribute( QStringLiteral( "path" ), context.pathResolver().writePath( rat->filePath( ) ) );
+        elem.appendChild( ratElem );
+      }
+    }
+    layerNode.appendChild( elem );
+  }
+}
+
+void QgsRasterLayer::readRasterAttributeTableExternalPaths( const QDomNode &layerNode, QgsReadWriteContext &context ) const
+{
+  const QDomElement ratsElement = layerNode.firstChildElement( QStringLiteral( "FileBasedAttributeTables" ) );
+  if ( !ratsElement.isNull() && ratsElement.childNodes().count() > 0 )
+  {
+    const QDomNodeList ratElements { ratsElement.childNodes() };
+    for ( int idx = 0; idx < ratElements.count(); idx++ )
+    {
+      const QDomNode ratElement { ratElements.at( idx ) };
+      if ( ratElement.attributes().contains( QStringLiteral( "band" ) )
+           && ratElement.attributes().contains( QStringLiteral( "path" ) ) )
+      {
+        bool ok;
+        const int band { ratElement.attributes().namedItem( QStringLiteral( "band" ) ).nodeValue().toInt( &ok ) };
+
+        // Check band is ok
+        if ( ! ok ||  band <= 0 || band > bandCount() )
+        {
+          QgsMessageLog::logMessage( tr( "Error reading raster attribute table: invalid band %1." ).arg( band ), tr( "Raster" ) );
+          continue;
+        }
+
+        const QString path { context.pathResolver().readPath( ratElement.attributes().namedItem( QStringLiteral( "path" ) ).nodeValue() ) };
+        if ( ! QFile::exists( path ) )
+        {
+          QgsMessageLog::logMessage( tr( "Error loading raster attribute table, file not found: %1." ).arg( path ), tr( "Raster" ) );
+          continue;
+        }
+
+        std::unique_ptr<QgsRasterAttributeTable> rat = std::make_unique<QgsRasterAttributeTable>();
+        QString errorMessage;
+        if ( ! rat->readFromFile( path, &errorMessage ) )
+        {
+          QgsMessageLog::logMessage( tr( "Error loading raster attribute table from path %1: %2" ).arg( path, errorMessage ), tr( "Raster" ) );
+          continue;
+        }
+
+        // All good, set the RAT
+        mDataProvider->setAttributeTable( band, rat.release() );
+      }
+    }
+  }
+}
+
 void QgsRasterLayer::closeDataProvider()
 {
   setValid( false );
@@ -1060,6 +1209,11 @@ QgsMapLayerTemporalProperties *QgsRasterLayer::temporalProperties()
   return mTemporalProperties;
 }
 
+QgsMapLayerElevationProperties *QgsRasterLayer::elevationProperties()
+{
+  return mElevationProperties;
+}
+
 void QgsRasterLayer::setContrastEnhancement( QgsContrastEnhancement::ContrastEnhancementAlgorithm algorithm, QgsRasterMinMaxOrigin::Limits limits, const QgsRectangle &extent, int sampleSize, bool generateLookupTableFlag )
 {
   setContrastEnhancement( algorithm,
@@ -1144,9 +1298,29 @@ void QgsRasterLayer::setContrastEnhancement( QgsContrastEnhancement::ContrastEnh
 
       if ( rendererType == QLatin1String( "singlebandpseudocolor" ) )
       {
-        myPseudoColorRenderer->setClassificationMin( min );
-        myPseudoColorRenderer->setClassificationMax( max );
-        if ( myPseudoColorRenderer->shader() )
+        // This is not necessary, but clang-tidy thinks it is.
+        if ( ! myPseudoColorRenderer )
+        {
+          return;
+        }
+        // Do not overwrite min/max with NaN if they were already set,
+        // for example when the style was already loaded from a raster attribute table
+        // in that case we need to respect the style from the attribute table and do
+        // not perform any reclassification.
+        bool minMaxChanged { false };
+        if ( ! std::isnan( min ) )
+        {
+          myPseudoColorRenderer->setClassificationMin( min );
+          minMaxChanged = true;
+        }
+
+        if ( ! std::isnan( max ) )
+        {
+          myPseudoColorRenderer->setClassificationMax( max );
+          minMaxChanged = true;
+        }
+
+        if ( minMaxChanged && myPseudoColorRenderer->shader() )
         {
           QgsColorRampShader *colorRampShader = dynamic_cast<QgsColorRampShader *>( myPseudoColorRenderer->shader()->rasterShaderFunction() );
           if ( colorRampShader )
@@ -1168,11 +1342,12 @@ void QgsRasterLayer::setContrastEnhancement( QgsContrastEnhancement::ContrastEnh
     }
   }
 
-  if ( rendererType == QLatin1String( "singlebandgray" ) )
+  // Again, second check is redundant but clang-tidy doesn't agree
+  if ( rendererType == QLatin1String( "singlebandgray" ) && myGrayRenderer )
   {
     if ( myEnhancements.first() ) myGrayRenderer->setContrastEnhancement( myEnhancements.takeFirst() );
   }
-  else if ( rendererType == QLatin1String( "multibandcolor" ) )
+  else if ( rendererType == QLatin1String( "multibandcolor" ) && myMultiBandRenderer )
   {
     if ( myEnhancements.first() ) myMultiBandRenderer->setRedContrastEnhancement( myEnhancements.takeFirst() );
     if ( myEnhancements.first() ) myMultiBandRenderer->setGreenContrastEnhancement( myEnhancements.takeFirst() );
@@ -1222,7 +1397,7 @@ void QgsRasterLayer::refreshContrastEnhancement( const QgsRectangle &extent )
                             renderer()->minMaxOrigin().limits() == QgsRasterMinMaxOrigin::None ?
                             QgsRasterMinMaxOrigin::MinMax : renderer()->minMaxOrigin().limits(),
                             extent,
-                            SAMPLE_SIZE,
+                            static_cast<int>( SAMPLE_SIZE ),
                             true,
                             renderer() );
   }
@@ -1235,7 +1410,7 @@ void QgsRasterLayer::refreshContrastEnhancement( const QgsRectangle &extent )
       setContrastEnhancement( QgsContrastEnhancement::StretchToMinimumMaximum,
                               myLimits,
                               extent,
-                              SAMPLE_SIZE,
+                              static_cast<int>( SAMPLE_SIZE ),
                               true,
                               renderer() );
     }
@@ -1278,7 +1453,7 @@ void QgsRasterLayer::refreshRenderer( QgsRasterRenderer *rasterRenderer, const Q
       computeMinMax( sbpcr->band(),
                      rasterRenderer->minMaxOrigin(),
                      rasterRenderer->minMaxOrigin().limits(), extent,
-                     SAMPLE_SIZE, min, max );
+                     static_cast<int>( SAMPLE_SIZE ), min, max );
       sbpcr->setClassificationMin( min );
       sbpcr->setClassificationMax( max );
 
@@ -1318,7 +1493,7 @@ void QgsRasterLayer::refreshRenderer( QgsRasterRenderer *rasterRenderer, const Q
       setContrastEnhancement( ce->contrastEnhancementAlgorithm(),
                               rasterRenderer->minMaxOrigin().limits(),
                               extent,
-                              SAMPLE_SIZE,
+                              static_cast<int>( SAMPLE_SIZE ),
                               true,
                               rasterRenderer );
 
@@ -1955,7 +2130,13 @@ bool QgsRasterLayer::readSymbology( const QDomNode &layer_node, QString &errorMe
   if ( !elemDataDefinedProperties.isNull() )
     mPipe->dataDefinedProperties().readXml( elemDataDefinedProperties, QgsRasterPipe::propertyDefinitions() );
 
+  if ( categories.testFlag( MapTips ) )
+    setMapTipTemplate( layer_node.namedItem( QStringLiteral( "mapTip" ) ).toElement().text() );
+
   readCustomProperties( layer_node );
+
+  emit rendererChanged();
+  emitStyleChanged();
 
   return true;
 }
@@ -2036,6 +2217,10 @@ bool QgsRasterLayer::readXml( const QDomNode &layer_node, QgsReadWriteContext &c
     if ( mReadFlags & QgsMapLayer::FlagTrustLayerMetadata )
     {
       flags |= QgsDataProvider::FlagTrustDataSource;
+    }
+    if ( mReadFlags & QgsMapLayer::FlagForceReadOnly )
+    {
+      flags |= QgsDataProvider::ForceReadOnly;
     }
     // read extent
     if ( mReadFlags & QgsMapLayer::FlagReadExtentFromXml )
@@ -2132,6 +2317,8 @@ bool QgsRasterLayer::readXml( const QDomNode &layer_node, QgsReadWriteContext &c
     }
   }
 
+  readRasterAttributeTableExternalPaths( layer_node, context );
+
   readStyleManager( layer_node );
 
   return res;
@@ -2145,6 +2332,15 @@ bool QgsRasterLayer::writeSymbology( QDomNode &layer_node, QDomDocument &documen
 
   QDomElement layerElement = layer_node.toElement();
   writeCommonStyle( layerElement, document, context, categories );
+
+  // save map tip
+  if ( categories.testFlag( MapTips ) )
+  {
+    QDomElement mapTipElem = document.createElement( QStringLiteral( "mapTip" ) );
+    QDomText mapTipText = document.createTextNode( mapTipTemplate() );
+    mapTipElem.appendChild( mapTipText );
+    layer_node.toElement().appendChild( mapTipElem );
+  }
 
   // Store pipe members into pipe element, in future, it will be
   // possible to add custom filters into the pipe
@@ -2246,6 +2442,9 @@ bool QgsRasterLayer::writeXml( QDomNode &layer_node,
   {
     layer_node.appendChild( noData );
   }
+
+  // Store file-based raster attribute table paths (if any)
+  writeRasterAttributeTableExternalPaths( layer_node, document, context );
 
   writeStyleManager( layer_node, document );
 

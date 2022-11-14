@@ -1919,10 +1919,10 @@ void TestQgsCompoundCurve::orientation()
   ( void )cc.orientation(); // no crash
 
   cc.fromWkt( QStringLiteral( "CompoundCurve( ( 0 0, 0 1), CircularString (0 1, 1 1, 1 0), (1 0, 0 0))" ) );
-  QCOMPARE( cc.orientation(), QgsCurve::Clockwise );
+  QCOMPARE( cc.orientation(), Qgis::AngularDirection::Clockwise );
 
   cc.fromWkt( QStringLiteral( "CompoundCurve( ( 0 0, 1 0), CircularString (1 0, 1 1, 0 1), (0 1, 0 0))" ) );
-  QCOMPARE( cc.orientation(), QgsCurve::CounterClockwise );
+  QCOMPARE( cc.orientation(), Qgis::AngularDirection::CounterClockwise );
 }
 
 void TestQgsCompoundCurve::length()
@@ -2713,7 +2713,7 @@ void TestQgsCompoundCurve::crs3dTransformAndReverse()
   QGSCOMPARENEAR( pt.z(), 5.0, 0.001 );
   QCOMPARE( pt.m(), 6.0 );
 
-#if PROJ_VERSION_MAJOR<6 // note - z value transform doesn't currently work with proj 6+, because we don't yet support compound CRS definitions
+#if 0 // note - z value transform doesn't currently work with proj 6+, because we don't yet support compound CRS definitions
   //z value transform
   cc.transform( tr, Qgis::TransformDirection::Forward, true );
 

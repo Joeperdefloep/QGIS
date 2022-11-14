@@ -601,33 +601,50 @@ void QgsColorWheel::setColorFromPos( const QPointF pos )
 
 void QgsColorWheel::mouseMoveEvent( QMouseEvent *event )
 {
-  setColorFromPos( event->pos() );
+  if ( mIsDragging )
+    setColorFromPos( event->pos() );
+
   QgsColorWidget::mouseMoveEvent( event );
 }
 
 void QgsColorWheel::mousePressEvent( QMouseEvent *event )
 {
-  //calculate where the event occurred -- on the wheel or inside the triangle?
-
-  //create a line from the widget's center to the event
-  const QLineF line = QLineF( width() / 2.0, height() / 2.0, event->pos().x(), event->pos().y() );
-
-  const double innerLength = mWheelImage->width() / 2.0 - mWheelThickness;
-  if ( line.length() < innerLength )
+  if ( event->button() == Qt::LeftButton )
   {
-    mClickedPart = QgsColorWheel::Triangle;
+    mIsDragging = true;
+    //calculate where the event occurred -- on the wheel or inside the triangle?
+
+    //create a line from the widget's center to the event
+    const QLineF line = QLineF( width() / 2.0, height() / 2.0, event->pos().x(), event->pos().y() );
+
+    const double innerLength = mWheelImage->width() / 2.0 - mWheelThickness;
+    if ( line.length() < innerLength )
+    {
+      mClickedPart = QgsColorWheel::Triangle;
+    }
+    else
+    {
+      mClickedPart = QgsColorWheel::Wheel;
+    }
+    setColorFromPos( event->pos() );
   }
   else
   {
-    mClickedPart = QgsColorWheel::Wheel;
+    QgsColorWidget::mousePressEvent( event );
   }
-  setColorFromPos( event->pos() );
 }
 
 void QgsColorWheel::mouseReleaseEvent( QMouseEvent *event )
 {
-  Q_UNUSED( event )
-  mClickedPart = QgsColorWheel::None;
+  if ( event->button() == Qt::LeftButton )
+  {
+    mIsDragging = false;
+    mClickedPart = QgsColorWheel::None;
+  }
+  else
+  {
+    QgsColorWidget::mouseReleaseEvent( event );
+  }
 }
 
 void QgsColorWheel::createWheel()
@@ -843,13 +860,36 @@ void QgsColorBox::resizeEvent( QResizeEvent *event )
 
 void QgsColorBox::mouseMoveEvent( QMouseEvent *event )
 {
-  setColorFromPoint( event->pos() );
+  if ( mIsDragging )
+  {
+    setColorFromPoint( event->pos() );
+  }
   QgsColorWidget::mouseMoveEvent( event );
 }
 
 void QgsColorBox::mousePressEvent( QMouseEvent *event )
 {
-  setColorFromPoint( event->pos() );
+  if ( event->button() == Qt::LeftButton )
+  {
+    mIsDragging = true;
+    setColorFromPoint( event->pos() );
+  }
+  else
+  {
+    QgsColorWidget::mousePressEvent( event );
+  }
+}
+
+void QgsColorBox::mouseReleaseEvent( QMouseEvent *event )
+{
+  if ( event->button() == Qt::LeftButton )
+  {
+    mIsDragging = false;
+  }
+  else
+  {
+    QgsColorWidget::mouseReleaseEvent( event );
+  }
 }
 
 void QgsColorBox::createBox()
@@ -1161,7 +1201,11 @@ void QgsColorRampWidget::setMarkerSize( const int markerSize )
 
 void QgsColorRampWidget::mouseMoveEvent( QMouseEvent *event )
 {
-  setColorFromPoint( event->pos() );
+  if ( mIsDragging )
+  {
+    setColorFromPoint( event->pos() );
+  }
+
   QgsColorWidget::mouseMoveEvent( event );
 }
 
@@ -1190,7 +1234,27 @@ void QgsColorRampWidget::wheelEvent( QWheelEvent *event )
 
 void QgsColorRampWidget::mousePressEvent( QMouseEvent *event )
 {
-  setColorFromPoint( event->pos() );
+  if ( event->button() == Qt::LeftButton )
+  {
+    mIsDragging = true;
+    setColorFromPoint( event->pos() );
+  }
+  else
+  {
+    QgsColorWidget::mousePressEvent( event );
+  }
+}
+
+void QgsColorRampWidget::mouseReleaseEvent( QMouseEvent *event )
+{
+  if ( event->button() == Qt::LeftButton )
+  {
+    mIsDragging = false;
+  }
+  else
+  {
+    QgsColorWidget::mousePressEvent( event );
+  }
 }
 
 void QgsColorRampWidget::keyPressEvent( QKeyEvent *event )
@@ -1492,22 +1556,30 @@ void QgsColorTextWidget::textChanged()
 void QgsColorTextWidget::showMenu()
 {
   QMenu colorContextMenu;
+  QAction *hexRgbaAction = nullptr;
+  QAction *rgbaAction = nullptr;
 
   QAction *hexRgbAction = new QAction( tr( "#RRGGBB" ), nullptr );
   colorContextMenu.addAction( hexRgbAction );
-  QAction *hexRgbaAction = new QAction( tr( "#RRGGBBAA" ), nullptr );
-  colorContextMenu.addAction( hexRgbaAction );
+  if ( mAllowAlpha )
+  {
+    hexRgbaAction = new QAction( tr( "#RRGGBBAA" ), nullptr );
+    colorContextMenu.addAction( hexRgbaAction );
+  }
   QAction *rgbAction = new QAction( tr( "rgb( r, g, b )" ), nullptr );
   colorContextMenu.addAction( rgbAction );
-  QAction *rgbaAction = new QAction( tr( "rgba( r, g, b, a )" ), nullptr );
-  colorContextMenu.addAction( rgbaAction );
+  if ( mAllowAlpha )
+  {
+    rgbaAction = new QAction( tr( "rgba( r, g, b, a )" ), nullptr );
+    colorContextMenu.addAction( rgbaAction );
+  }
 
   QAction *selectedAction = colorContextMenu.exec( QCursor::pos() );
   if ( selectedAction == hexRgbAction )
   {
     mFormat = QgsColorTextWidget::HexRgb;
   }
-  else if ( selectedAction == hexRgbaAction )
+  else if ( hexRgbaAction && selectedAction == hexRgbaAction )
   {
     mFormat = QgsColorTextWidget::HexRgbA;
   }
@@ -1515,7 +1587,7 @@ void QgsColorTextWidget::showMenu()
   {
     mFormat = QgsColorTextWidget::Rgb;
   }
-  else if ( selectedAction == rgbaAction )
+  else if ( rgbaAction && selectedAction == rgbaAction )
   {
     mFormat = QgsColorTextWidget::Rgba;
   }
@@ -1527,6 +1599,10 @@ void QgsColorTextWidget::showMenu()
   updateText();
 }
 
+void QgsColorTextWidget::setAllowOpacity( const bool allowOpacity )
+{
+  mAllowAlpha = allowOpacity;
+}
 
 //
 // QgsColorPreviewWidget

@@ -727,8 +727,13 @@ void QgsCompoundCurve::transform( const QTransform &t, double zTranslate, double
 void QgsCompoundCurve::addToPainterPath( QPainterPath &path ) const
 {
   QPainterPath pp;
+
   for ( const QgsCurve *curve : mCurves )
   {
+    if ( curve != mCurves.at( 0 ) && pp.currentPosition() != curve->startPoint().toQPointF() )
+    {
+      pp.lineTo( curve->startPoint().toQPointF() );
+    }
     curve->addToPainterPath( pp );
   }
   path.addPath( pp );
@@ -739,6 +744,10 @@ void QgsCompoundCurve::drawAsPolygon( QPainter &p ) const
   QPainterPath pp;
   for ( const QgsCurve *curve : mCurves )
   {
+    if ( curve != mCurves.at( 0 ) && pp.currentPosition() != curve->startPoint().toQPointF() )
+    {
+      pp.lineTo( curve->startPoint().toQPointF() );
+    }
     curve->addToPainterPath( pp );
   }
   p.drawPath( pp );
@@ -1139,10 +1148,19 @@ std::tuple<std::unique_ptr<QgsCurve>, std::unique_ptr<QgsCurve> > QgsCompoundCur
 
 void QgsCompoundCurve::sumUpArea( double &sum ) const
 {
+  if ( mHasCachedSummedUpArea )
+  {
+    sum += mSummedUpArea;
+    return;
+  }
+
+  mSummedUpArea = 0;
   for ( const QgsCurve *curve : mCurves )
   {
-    curve->sumUpArea( sum );
+    curve->sumUpArea( mSummedUpArea );
   }
+  mHasCachedSummedUpArea = true;
+  sum += mSummedUpArea;
 }
 
 void QgsCompoundCurve::close()

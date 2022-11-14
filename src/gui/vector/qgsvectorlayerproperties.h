@@ -35,7 +35,6 @@
 class QgsMapLayer;
 
 class QgsAttributeActionDialog;
-class QgsApplyDialog;
 class QgsVectorLayer;
 class QgsLabelingWidget;
 class QgsDiagramProperties;
@@ -54,6 +53,10 @@ class QgsMaskingWidget;
 class QgsVectorLayerTemporalPropertiesWidget;
 class QgsProviderSourceWidget;
 
+/**
+ * \ingroup gui
+ * \class QgsVectorLayerProperties
+ */
 class GUI_EXPORT QgsVectorLayerProperties : public QgsOptionsDialogBase, private Ui::QgsVectorLayerPropertiesBase, private QgsExpressionContextGenerator
 {
     Q_OBJECT
@@ -65,6 +68,7 @@ class GUI_EXPORT QgsVectorLayerProperties : public QgsOptionsDialogBase, private
       QML,
       SLD,
       DB,
+      Local,
     };
     Q_ENUM( StyleType )
 #endif
@@ -251,6 +255,8 @@ class GUI_EXPORT QgsVectorLayerProperties : public QgsOptionsDialogBase, private
     QgsVectorLayerTemporalPropertiesWidget *mTemporalWidget = nullptr;
 
     QgsProviderSourceWidget *mSourceWidget = nullptr;
+
+    QgsCoordinateReferenceSystem mBackupCrs;
 
   private slots:
     void openPanel( QgsPanelWidget *panel );

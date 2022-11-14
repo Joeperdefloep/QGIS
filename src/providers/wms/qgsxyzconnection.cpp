@@ -34,10 +34,13 @@ QString QgsXyzConnection::encodedUri() const
     uri.setUsername( username );
   if ( ! password.isEmpty() )
     uri.setPassword( password );
-  if ( ! referer.isEmpty() )
-    uri.setParam( QStringLiteral( "referer" ), referer );
+
+  uri.setHttpHeaders( httpHeaders );
+
   if ( tilePixelRatio != 0 )
     uri.setParam( QStringLiteral( "tilePixelRatio" ), QString::number( tilePixelRatio ) );
+  if ( !interpretation.isEmpty() )
+    uri.setParam( QStringLiteral( "interpretation" ), interpretation );
   return uri.encodedUri();
 }
 
@@ -91,9 +94,12 @@ QgsXyzConnection QgsXyzConnectionUtils::connection( const QString &name )
   conn.authCfg = settings.value( QStringLiteral( "authcfg" ) ).toString();
   conn.username = settings.value( QStringLiteral( "username" ) ).toString();
   conn.password = settings.value( QStringLiteral( "password" ) ).toString();
-  conn.referer = settings.value( QStringLiteral( "referer" ) ).toString();
+
+  conn.httpHeaders.setFromSettings( settings );
+
   conn.tilePixelRatio = settings.value( QStringLiteral( "tilePixelRatio" ), 0 ).toDouble();
   conn.hidden = settings.value( QStringLiteral( "hidden" ) ).toBool();
+  conn.interpretation = settings.value( QStringLiteral( "interpretation" ), QString() ).toString();
   return conn;
 }
 
@@ -134,8 +140,11 @@ void QgsXyzConnectionUtils::addConnection( const QgsXyzConnection &conn )
   settings.setValue( QStringLiteral( "authcfg" ), conn.authCfg );
   settings.setValue( QStringLiteral( "username" ), conn.username );
   settings.setValue( QStringLiteral( "password" ), conn.password );
-  settings.setValue( QStringLiteral( "referer" ), conn.referer );
+
+  conn.httpHeaders.updateSettings( settings );
+
   settings.setValue( QStringLiteral( "tilePixelRatio" ), conn.tilePixelRatio );
+  settings.setValue( QStringLiteral( "interpretation" ), conn.interpretation );
   if ( addHiddenProperty )
   {
     settings.setValue( QStringLiteral( "hidden" ), false );

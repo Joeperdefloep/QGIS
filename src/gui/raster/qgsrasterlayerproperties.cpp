@@ -23,8 +23,11 @@
 #include "qgsbrightnesscontrastfilter.h"
 #include "qgscontrastenhancement.h"
 #include "qgscoordinatetransform.h"
+#include "qgscreaterasterattributetabledialog.h"
+#include "qgscolorrampimpl.h"
 #include "qgsprojectionselectiondialog.h"
 #include "qgslogger.h"
+#include "qgsloadrasterattributetabledialog.h"
 #include "qgsmapcanvas.h"
 #include "qgsmaplayerstyleguiutils.h"
 #include "qgsmaptoolemitpoint.h"
@@ -66,6 +69,8 @@
 #include "qgsrasterlayertemporalproperties.h"
 #include "qgsdoublevalidator.h"
 #include "qgsmaplayerconfigwidgetfactory.h"
+#include "qgsprojectutils.h"
+#include "qgsrasterattributetablewidget.h"
 
 #include "qgsrasterlayertemporalpropertieswidget.h"
 #include "qgsprojecttimesettings.h"
@@ -232,6 +237,37 @@ QgsRasterLayerProperties::QgsRasterLayerProperties( QgsMapLayer *lyr, QgsMapCanv
     return;
   }
 
+  updateRasterAttributeTableOptionsPage();
+
+  connect( mRasterLayer, &QgsRasterLayer::rendererChanged, this, &QgsRasterLayerProperties::updateRasterAttributeTableOptionsPage );
+
+  connect( mCreateRasterAttributeTableButton, &QPushButton::clicked, this, [ = ]
+  {
+    if ( mRasterLayer->canCreateRasterAttributeTable() )
+    {
+      // Create the attribute table from the renderer
+      QgsCreateRasterAttributeTableDialog dlg { mRasterLayer };
+      dlg.setOpenWhenDoneVisible( false );
+      if ( dlg.exec() == QDialog::Accepted )
+      {
+        updateRasterAttributeTableOptionsPage();
+      }
+    }
+  } );
+
+  connect( mLoadRasterAttributeTableFromFileButton, &QPushButton::clicked, this, [ = ]
+  {
+    // Load the attribute table from a VAT.DBF file
+    QgsLoadRasterAttributeTableDialog dlg { mRasterLayer };
+    dlg.setOpenWhenDoneVisible( false );
+    if ( dlg.exec() == QDialog::Accepted )
+    {
+      updateRasterAttributeTableOptionsPage();
+    }
+  } );
+
+  mBackupCrs = mRasterLayer->crs();
+
   // Handles window modality raising canvas
   if ( mMapCanvas && mRasterTransparencyWidget->pixelSelectorTool() )
   {
@@ -260,9 +296,25 @@ QgsRasterLayerProperties::QgsRasterLayerProperties( QgsMapLayer *lyr, QgsMapCanv
   mContext << QgsExpressionContextUtils::globalScope()
            << QgsExpressionContextUtils::projectScope( QgsProject::instance() )
            << QgsExpressionContextUtils::atlasScope( nullptr );
+
   if ( mMapCanvas )
+  {
     mContext << QgsExpressionContextUtils::mapSettingsScope( mMapCanvas->mapSettings() );
+    // Initialize with layer center
+    mContext << QgsExpressionContextUtils::mapLayerPositionScope( mRasterLayer->extent().center() );
+  }
+
   mContext << QgsExpressionContextUtils::layerScope( mRasterLayer );
+
+  mMapTipExpressionWidget->registerExpressionContextGenerator( this );
+
+  connect( mInsertExpressionButton, &QAbstractButton::clicked, this, [ = ]
+  {
+    QString expression = QStringLiteral( "[% " );
+    expression += mMapTipExpressionWidget->expression();
+    expression += QLatin1String( " %]" );
+    mMapTipWidget->insertText( expression );
+  } );
 
   QgsRasterDataProvider *provider = mRasterLayer->dataProvider();
 
@@ -384,6 +436,7 @@ QgsRasterLayerProperties::QgsRasterLayerProperties( QgsMapLayer *lyr, QgsMapCanv
   }
 
   //blend mode
+  mBlendModeComboBox->setShowClippingModes( QgsProjectUtils::layerIsContainedInGroupLayer( QgsProject::instance(), mRasterLayer ) );
   mBlendModeComboBox->setBlendMode( mRasterLayer->blendMode() );
 
   //transparency band
@@ -520,9 +573,13 @@ QgsRasterLayerProperties::QgsRasterLayerProperties( QgsMapLayer *lyr, QgsMapCanv
     mOptsPage_Histogram->setProperty( "helpPage", QStringLiteral( "working_with_raster/raster_properties.html#histogram-properties" ) );
 
   mOptsPage_Rendering->setProperty( "helpPage", QStringLiteral( "working_with_raster/raster_properties.html#rendering-properties" ) );
+  mOptsPage_Temporal->setProperty( "helpPage", QStringLiteral( "working_with_raster/raster_properties.html#temporal-properties" ) );
 
   if ( mOptsPage_Pyramids )
     mOptsPage_Pyramids->setProperty( "helpPage", QStringLiteral( "working_with_raster/raster_properties.html#pyramids-properties" ) );
+
+  if ( mOptsPage_Display )
+    mOptsPage_Display->setProperty( "helpPage", QStringLiteral( "working_with_raster/raster_properties.html#display-properties" ) );
 
   mOptsPage_Metadata->setProperty( "helpPage", QStringLiteral( "working_with_raster/raster_properties.html#metadata-properties" ) );
   mOptsPage_Legend->setProperty( "helpPage", QStringLiteral( "working_with_raster/raster_properties.html#legend-properties" ) );
@@ -560,6 +617,30 @@ void QgsRasterLayerProperties::addPropertiesPageFactory( const QgsMapLayerConfig
 QgsExpressionContext QgsRasterLayerProperties::createExpressionContext() const
 {
   return mContext;
+}
+
+void QgsRasterLayerProperties::updateRasterAttributeTableOptionsPage( )
+{
+  if ( mRasterAttributeTableWidget )
+  {
+    mOptsPage_RasterAttributeTable->layout()->removeWidget( mRasterAttributeTableWidget );
+    mRasterAttributeTableWidget = nullptr;
+  }
+
+  // Setup raster attribute table
+  if ( mRasterLayer->attributeTableCount() > 0 )
+  {
+    mRasterAttributeTableWidget = new QgsRasterAttributeTableWidget( this, mRasterLayer );
+    mOptsPage_RasterAttributeTable->layout()->addWidget( mRasterAttributeTableWidget );
+    // When the renderer changes we need to sync the style options page
+    connect( mRasterAttributeTableWidget, &QgsRasterAttributeTableWidget::rendererChanged, this, &QgsRasterLayerProperties::syncToLayer );
+    mNoRasterAttributeTableWidget->hide();
+  }
+  else
+  {
+    mNoRasterAttributeTableWidget->show();
+    mCreateRasterAttributeTableButton->setEnabled( mRasterLayer->canCreateRasterAttributeTable() );
+  }
 }
 
 void QgsRasterLayerProperties::setRendererWidget( const QString &rendererName )
@@ -663,7 +744,10 @@ void QgsRasterLayerProperties::sync()
   }
 
   if ( mSourceWidget )
+  {
+    mSourceWidget->setMapCanvas( mMapCanvas );
     mSourceWidget->setSourceUri( mRasterLayer->source() );
+  }
 
   const QgsRasterDataProvider *provider = mRasterLayer->dataProvider();
   if ( !provider )
@@ -786,6 +870,8 @@ void QgsRasterLayerProperties::sync()
   mLayerLegendUrlLineEdit->setText( mRasterLayer->legendUrl() );
   mLayerLegendUrlFormatComboBox->setCurrentIndex( mLayerLegendUrlFormatComboBox->findText( mRasterLayer->legendUrlFormat() ) );
 
+  mMapTipWidget->setText( mRasterLayer->mapTipTemplate() );
+
   //WMS print layer
   QVariant wmsPrintLayer = mRasterLayer->customProperty( QStringLiteral( "WMSPrintLayer" ) );
   if ( wmsPrintLayer.isValid() )
@@ -829,6 +915,13 @@ void QgsRasterLayerProperties::apply()
   // Do nothing on "bad" layers
   if ( !mRasterLayer->isValid() )
     return;
+
+  // apply all plugin dialogs
+  for ( QgsMapLayerConfigWidget *page : std::as_const( mLayerPropertiesPages ) )
+  {
+    page->apply();
+  }
+
 
   /*
    * Legend Tab
@@ -880,6 +973,7 @@ void QgsRasterLayerProperties::apply()
     mRasterLayer->setRenderer( rendererWidget->renderer() );
   }
 
+  mBackupCrs = mRasterLayer->crs();
   mMetadataWidget->acceptMetadata();
   mMetadataFilled = false;
 
@@ -1035,6 +1129,8 @@ void QgsRasterLayerProperties::apply()
 
   mRasterLayer->pipe()->setDataDefinedProperties( mPropertyCollection );
 
+  mRasterLayer->setMapTipTemplate( mMapTipWidget->text() );
+
   // Force a redraw of the legend
   mRasterLayer->setLegend( QgsMapLayerLegend::defaultRasterLegend( mRasterLayer ) );
 
@@ -1157,7 +1253,7 @@ void QgsRasterLayerProperties::urlClicked( const QUrl &url )
 {
   QFileInfo file( url.toLocalFile() );
   if ( file.exists() && !file.isDir() )
-    QgsGui::instance()->nativePlatformInterface()->openFileExplorerAndSelectFile( url.toLocalFile() );
+    QgsGui::nativePlatformInterface()->openFileExplorerAndSelectFile( url.toLocalFile() );
   else
     QDesktopServices::openUrl( url );
 }
@@ -1537,9 +1633,13 @@ void QgsRasterLayerProperties::saveDefaultStyle_clicked()
 
   // a flag passed by reference
   bool defaultSavedFlag = false;
+  // TODO Once the deprecated `saveDefaultStyle()` method is gone, just
+  // remove the NOWARN_DEPRECATED tags
+  Q_NOWARN_DEPRECATED_PUSH
   // after calling this the above flag will be set true for success
   // or false if the save operation failed
   QString myMessage = mRasterLayer->saveDefaultStyle( defaultSavedFlag );
+  Q_NOWARN_DEPRECATED_POP
   if ( !defaultSavedFlag )
   {
     //let the user know what went wrong
@@ -1785,6 +1885,13 @@ void QgsRasterLayerProperties::updateInformationContent()
 
 void QgsRasterLayerProperties::onCancel()
 {
+
+  // Give the user a chance to save the raster attribute table edits.
+  if ( mRasterAttributeTableWidget && mRasterAttributeTableWidget->isDirty() )
+  {
+    mRasterAttributeTableWidget->setEditable( false, false );
+  }
+
   if ( mOldStyle.xmlData() != mRasterLayer->styleManager()->style( mRasterLayer->styleManager()->currentStyle() ).xmlData() )
   {
     // need to reset style to previous - style applied directly to the layer (not in apply())
@@ -1795,6 +1902,8 @@ void QgsRasterLayerProperties::onCancel()
     mRasterLayer->importNamedStyle( doc, myMessage );
     syncToLayer();
   }
+  if ( mBackupCrs != mRasterLayer->crs() )
+    mRasterLayer->setCrs( mBackupCrs );
 }
 
 void QgsRasterLayerProperties::showHelp()

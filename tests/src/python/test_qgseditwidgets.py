@@ -143,6 +143,83 @@ class TestQgsValueRelationWidget(unittest.TestCase):
         self.assertTrue(widget.isEnabled())
         self.assertEqual(widget.item(0, 0).flags(), widget.item(0, 0).flags() | Qt.ItemIsEnabled)
 
+    def test_value_relation_set_value_not_in_map(self):
+        """
+        Test that setting a value not in the map is correctly handled
+        """
+        layer = QgsVectorLayer("none?field=text:string", "layer", "memory")
+        layer2 = QgsVectorLayer("none?field=code:string&field=value:string", "layer", "memory")
+        f = QgsFeature(layer2.fields())
+        f.setAttributes(['a', 'AAA'])
+        layer2.dataProvider().addFeature(f)
+        f.setAttributes(['b', 'BBB'])
+        layer2.dataProvider().addFeature(f)
+
+        QgsProject.instance().addMapLayer(layer)
+        QgsProject.instance().addMapLayer(layer2)
+
+        config = {'Layer': layer2.id(), 'Key': 'code', 'Value': 'value', 'AllowNull': False}
+        wrapper = QgsGui.editorWidgetRegistry().create('ValueRelation', layer, 0, config, None, None)
+        widget = wrapper.widget()
+
+        wrapper.setValues('a', [])
+        self.assertEqual(wrapper.value(), 'a')
+        self.assertEqual(widget.currentText(), 'AAA')
+
+        wrapper.setValues('b', [])
+        self.assertEqual(wrapper.value(), 'b')
+        self.assertEqual(widget.currentText(), 'BBB')
+
+        # set to value NOT in the layer, but this should not be lost
+        wrapper.setValues('c', [])
+        self.assertEqual(wrapper.value(), 'c')
+        self.assertEqual(widget.currentText(), '(c)')
+
+        wrapper.setValues(NULL, [])
+        self.assertEqual(wrapper.value(), NULL)
+        self.assertEqual(widget.currentIndex(), -1)
+
+        QgsProject.instance().removeAllMapLayers()
+
+    def test_value_relation_set_value_not_in_map_with_null(self):
+        """
+        Test that setting a value not in the map is correctly handled when null is allowed
+        """
+        layer = QgsVectorLayer("none?field=text:string", "layer", "memory")
+        layer2 = QgsVectorLayer("none?field=code:string&field=value:string", "layer", "memory")
+        f = QgsFeature(layer2.fields())
+        f.setAttributes(['a', 'AAA'])
+        layer2.dataProvider().addFeature(f)
+        f.setAttributes(['b', 'BBB'])
+        layer2.dataProvider().addFeature(f)
+
+        QgsProject.instance().addMapLayer(layer)
+        QgsProject.instance().addMapLayer(layer2)
+
+        config = {'Layer': layer2.id(), 'Key': 'code', 'Value': 'value', 'AllowNull': True}
+        wrapper = QgsGui.editorWidgetRegistry().create('ValueRelation', layer, 0, config, None, None)
+        widget = wrapper.widget()
+
+        wrapper.setValues('a', [])
+        self.assertEqual(wrapper.value(), 'a')
+        self.assertEqual(widget.currentText(), 'AAA')
+
+        wrapper.setValues('b', [])
+        self.assertEqual(wrapper.value(), 'b')
+        self.assertEqual(widget.currentText(), 'BBB')
+
+        # set to value NOT in the map, should not be lost
+        wrapper.setValues('c', [])
+        self.assertEqual(wrapper.value(), 'c')
+        self.assertEqual(widget.currentText(), '(c)')
+
+        # set to value NOT in the map, should not be lost
+        wrapper.setValues(NULL, [])
+        self.assertEqual(wrapper.value(), NULL)
+        self.assertEqual(widget.currentText(), '(no selection)')
+
+        QgsProject.instance().removeAllMapLayers()
+
 
 class TestQgsValueMapEditWidget(unittest.TestCase):
     VALUEMAP_NULL_TEXT = "{2839923C-8B7D-419E-B84B-CA2FE9B80EC7}"
@@ -163,11 +240,74 @@ class TestQgsValueMapEditWidget(unittest.TestCase):
 
         QgsProject.instance().removeAllMapLayers()
 
+    def test_value_map_set_value_not_in_map(self):
+        """
+        Test that setting a value not in the map is correctly handled
+        """
+        layer = QgsVectorLayer("none?field=text:string", "layer", "memory")
+        self.assertTrue(layer.isValid())
+        QgsProject.instance().addMapLayer(layer)
+
+        config = {'map': [{'AAAAA': 'a'}, {'BBBB': 'b'}]}
+        wrapper = QgsGui.editorWidgetRegistry().create('ValueMap', layer, 0, config, None, None)
+        widget = wrapper.widget()
+
+        wrapper.setValues('a', [])
+        self.assertEqual(wrapper.value(), 'a')
+        self.assertEqual(widget.currentText(), 'AAAAA')
+
+        wrapper.setValues('b', [])
+        self.assertEqual(wrapper.value(), 'b')
+        self.assertEqual(widget.currentText(), 'BBBB')
+
+        # set to value NOT in the map, should not be lost
+        wrapper.setValues('c', [])
+        self.assertEqual(wrapper.value(), 'c')
+        self.assertEqual(widget.currentText(), '(c)')
+
+        wrapper.setValues(NULL, [])
+        self.assertEqual(wrapper.value(), NULL)
+        self.assertEqual(widget.currentText(), '(NULL)')
+
+        QgsProject.instance().removeAllMapLayers()
+
+    def test_value_map_set_value_not_in_map_with_null(self):
+        """
+        Test that setting a value not in the map is correctly handled
+        """
+        layer = QgsVectorLayer("none?field=text:string", "layer", "memory")
+        self.assertTrue(layer.isValid())
+        QgsProject.instance().addMapLayer(layer)
+
+        config = {'map': [{'AAAAA': 'a'}, {'BBBB': 'b'}, {'nothing': self.VALUEMAP_NULL_TEXT}]}
+        wrapper = QgsGui.editorWidgetRegistry().create('ValueMap', layer, 0, config, None, None)
+        widget = wrapper.widget()
+
+        wrapper.setValues('a', [])
+        self.assertEqual(wrapper.value(), 'a')
+        self.assertEqual(widget.currentText(), 'AAAAA')
+
+        wrapper.setValues('b', [])
+        self.assertEqual(wrapper.value(), 'b')
+        self.assertEqual(widget.currentText(), 'BBBB')
+
+        # set to value NOT in the map, should not be lost
+        wrapper.setValues('c', [])
+        self.assertEqual(wrapper.value(), 'c')
+        self.assertEqual(widget.currentText(), '(c)')
+
+        # set to value NOT in the map, should not be lost
+        wrapper.setValues(NULL, [])
+        self.assertEqual(wrapper.value(), NULL)
+        self.assertEqual(widget.currentText(), 'nothing')
+
+        QgsProject.instance().removeAllMapLayers()
+
 
 class TestQgsUuidWidget(unittest.TestCase):
 
     def test_create_uuid(self):
-        layer = QgsVectorLayer("none?field=text_no_limit:text(0)&field=text_limit:text(10)", "layer", "memory")
+        layer = QgsVectorLayer("none?field=text_no_limit:text(0)&field=text_limit:text(10)&field=text_38:text(38)", "layer", "memory")
         self.assertTrue(layer.isValid())
         QgsProject.instance().addMapLayer(layer)
 
@@ -177,7 +317,7 @@ class TestQgsUuidWidget(unittest.TestCase):
         feature = QgsFeature(layer.fields())
         wrapper.setFeature(feature)
         val = wrapper.value()
-        # we can't directly check the result, as it will be random, so just check it's general properties
+        # we can't directly check the result, as it will be random, so just check its general properties
         self.assertEqual(len(val), 38)
         self.assertEqual(val[0], '{')
         self.assertEqual(val[-1], '}')
@@ -188,12 +328,23 @@ class TestQgsUuidWidget(unittest.TestCase):
         feature = QgsFeature(layer.fields())
         wrapper.setFeature(feature)
         val = wrapper.value()
-        # we can't directly check the result, as it will be random, so just check it's general properties
+        # we can't directly check the result, as it will be random, so just check its general properties
         self.assertEqual(len(val), 10)
         self.assertNotEqual(val[0], '{')
         self.assertNotEqual(val[-1], '}')
         with self.assertRaises(ValueError):
             val.index('-')
+
+        # limited length text field with length = 38, value must not be truncated
+        wrapper = QgsGui.editorWidgetRegistry().create('UuidGenerator', layer, 2, {}, None, None)
+        _ = wrapper.widget()
+        feature = QgsFeature(layer.fields())
+        wrapper.setFeature(feature)
+        val = wrapper.value()
+        # we can't directly check the result, as it will be random, so just check its general properties
+        self.assertEqual(len(val), 38)
+        self.assertEqual(val[0], '{')
+        self.assertEqual(val[-1], '}')
 
         QgsProject.instance().removeAllMapLayers()
 

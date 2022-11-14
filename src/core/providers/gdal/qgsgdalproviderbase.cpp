@@ -30,6 +30,7 @@
 #include <mutex>
 #include <QRegularExpression>
 #include <QRegularExpressionMatch>
+#include <QFileInfo>
 
 QgsGdalProviderBase::QgsGdalProviderBase()
 {
@@ -173,6 +174,14 @@ Qgis::DataType QgsGdalProviderBase::dataTypeFromGdal( const GDALDataType gdalDat
       return Qgis::DataType::CFloat32;
     case GDT_CFloat64:
       return Qgis::DataType::CFloat64;
+#if GDAL_VERSION_NUM >= GDAL_COMPUTE_VERSION(3,5,0)
+    case GDT_Int64:
+    case GDT_UInt64:
+      // Lossy conversion
+      // NOTE: remove conversion from/to double in qgsgdalprovider.cpp if using
+      // a native Qgis data type for Int64/UInt64 (look for GDAL_VERSION_NUM >= GDAL_COMPUTE_VERSION(3,5,0))
+      return Qgis::DataType::Float64;
+#endif
     case GDT_Unknown:
     case GDT_TypeCount:
       return Qgis::DataType::UnknownDataType;
@@ -276,13 +285,59 @@ GDALDatasetH QgsGdalProviderBase::gdalOpen( const QString &uri, unsigned int nOp
     CPLSetThreadLocalConfigOption( "OGR_GPKG_FOREIGN_KEY_CHECK", "NO" );
   }
 
-  GDALDatasetH hDS = GDALOpenEx( encodeGdalUri( parts ).toUtf8().constData(), nOpenFlags, nullptr, papszOpenOptions, nullptr );
+  QString gdalUri = encodeGdalUri( parts );
+  GDALDatasetH hDS = GDALOpenEx( gdalUri.toUtf8().constData(), nOpenFlags, nullptr, papszOpenOptions, nullptr );
+
+  if ( !hDS )
+  {
+    const QString vsiPrefix = parts.value( QStringLiteral( "vsiPrefix" ) ).toString();
+    const QString vsiSuffix = parts.value( QStringLiteral( "vsiSuffix" ) ).toString();
+    if ( vsiSuffix.isEmpty() && ( vsiPrefix == QLatin1String( "/vsizip/" )
+                                  || vsiPrefix == QLatin1String( "/vsigzip/" )
+                                  || vsiPrefix == QLatin1String( "/vsitar/" ) ) )
+    {
+      // in the case that a direct path to a vsi supported archive was specified BUT
+      // no file suffix was given, see if there's only one valid file we could read anyway and
+      // passthrough directly to this
+      char **papszSiblingFiles = VSIReadDirRecursive( gdalUri.toUtf8().constData( ) );
+      if ( papszSiblingFiles )
+      {
+        bool foundMultipleCandidates = false;
+        QString filename;
+        for ( int i = 0; papszSiblingFiles[i]; i++ )
+        {
+          const QString tmpPath = papszSiblingFiles[i];
+          const QString suffix = QFileInfo( tmpPath ).completeSuffix();
+          if ( suffix.endsWith( QLatin1String( "aux.xml" ), Qt::CaseInsensitive ) )
+            continue;
+
+          if ( !filename.isEmpty() )
+          {
+            foundMultipleCandidates = true;
+            break;
+          }
+          filename = tmpPath;
+        }
+        CSLDestroy( papszSiblingFiles );
+
+        if ( !foundMultipleCandidates )
+        {
+          parts.insert( QStringLiteral( "vsiSuffix" ), filename );
+          // try again with suffix
+          gdalUri = encodeGdalUri( parts );
+          hDS = GDALOpenEx( gdalUri.toUtf8().constData(), nOpenFlags, nullptr, papszOpenOptions, nullptr );
+        }
+      }
+    }
+  }
+
   CSLDestroy( papszOpenOptions );
 
   if ( modify_OGR_GPKG_FOREIGN_KEY_CHECK )
   {
     CPLSetThreadLocalConfigOption( "OGR_GPKG_FOREIGN_KEY_CHECK", nullptr );
   }
+
   return hDS;
 }
 
@@ -325,7 +380,16 @@ QVariantMap QgsGdalProviderBase::decodeGdalUri( const QString &uri )
 {
   QString path = uri;
   QString layerName;
+  QString authcfg;
   QStringList openOptions;
+
+  const QRegularExpression authcfgRegex( " authcfg='([^']+)'" );
+  QRegularExpressionMatch match;
+  if ( path.contains( authcfgRegex, &match ) )
+  {
+    path = path.remove( match.capturedStart( 0 ), match.capturedLength( 0 ) );
+    authcfg = match.captured( 1 );
+  }
 
   QString vsiPrefix = qgsVsiPrefix( path );
   QString vsiSuffix;
@@ -389,6 +453,8 @@ QVariantMap QgsGdalProviderBase::decodeGdalUri( const QString &uri )
     uriComponents.insert( QStringLiteral( "vsiPrefix" ), vsiPrefix );
   if ( !vsiSuffix.isEmpty() )
     uriComponents.insert( QStringLiteral( "vsiSuffix" ), vsiSuffix );
+  if ( !authcfg.isEmpty() )
+    uriComponents.insert( QStringLiteral( "authcfg" ), authcfg );
   return uriComponents;
 }
 
@@ -398,8 +464,14 @@ QString QgsGdalProviderBase::encodeGdalUri( const QVariantMap &parts )
   const QString vsiSuffix = parts.value( QStringLiteral( "vsiSuffix" ) ).toString();
   const QString path = parts.value( QStringLiteral( "path" ) ).toString();
   const QString layerName = parts.value( QStringLiteral( "layerName" ) ).toString();
+  const QString authcfg = parts.value( QStringLiteral( "authcfg" ) ).toString();
 
-  QString uri = vsiPrefix + path + vsiSuffix;
+  QString uri = vsiPrefix + path;
+  if ( !vsiSuffix.isEmpty() && !vsiSuffix.startsWith( '/' ) )
+    uri += '/' + vsiSuffix;
+  else
+    uri += vsiSuffix;
+
   if ( !layerName.isEmpty() && uri.endsWith( QLatin1String( "gpkg" ) ) )
     uri = QStringLiteral( "GPKG:%1:%2" ).arg( uri, layerName );
   else if ( !layerName.isEmpty() )
@@ -412,6 +484,9 @@ QString QgsGdalProviderBase::encodeGdalUri( const QVariantMap &parts )
     uri += QLatin1String( "|option:" );
     uri += openOption;
   }
+
+  if ( !authcfg.isEmpty() )
+    uri += QStringLiteral( " authcfg='%1'" ).arg( authcfg );
 
   return uri;
 }

@@ -18,8 +18,10 @@
 #include "qgsstringutils.h"
 #include "qgstextblock.h"
 #include "qgstextfragment.h"
+
 #include <QTextDocument>
 #include <QTextBlock>
+
 
 QgsTextDocument::~QgsTextDocument() = default;
 
@@ -187,7 +189,7 @@ void QgsTextDocument::splitLines( const QString &wrapCharacter, int autoWrapLeng
   }
 }
 
-void QgsTextDocument::applyCapitalization( QgsStringUtils::Capitalization capitalization )
+void QgsTextDocument::applyCapitalization( Qgis::Capitalization capitalization )
 {
   for ( QgsTextBlock &block : mBlocks )
   {

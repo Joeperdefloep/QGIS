@@ -254,6 +254,11 @@ bool QgsTriangularMesh::update( QgsMesh *nativeMesh, const QgsCoordinateTransfor
   return true;
 }
 
+bool QgsTriangularMesh::update( QgsMesh *nativeMesh )
+{
+  return update( nativeMesh, mCoordinateTransform );
+}
+
 void QgsTriangularMesh::finalizeTriangles()
 {
   mAverageTriangleSize = 0;
@@ -287,11 +292,13 @@ QgsMeshVertex QgsTriangularMesh::triangularToNativeCoordinates( const QgsMeshVer
 QgsRectangle QgsTriangularMesh::nativeExtent()
 {
   QgsRectangle nativeExtent;
-  if ( mCoordinateTransform.isValid() )
+  if ( !mCoordinateTransform.isShortCircuited() )
   {
     try
     {
-      nativeExtent = mCoordinateTransform.transform( extent(), Qgis::TransformDirection::Reverse );
+      QgsCoordinateTransform extentTransform = mCoordinateTransform;
+      extentTransform.setBallparkTransformsAreAppropriate( true );
+      nativeExtent = extentTransform.transformBoundingBox( extent(), Qgis::TransformDirection::Reverse );
     }
     catch ( QgsCsException &cse )
     {
@@ -531,7 +538,10 @@ QVector<QgsTriangularMesh *> QgsTriangularMesh::simplifyMesh( double reductionFa
     size_t maxNumberOfIndexes = baseIndexCount / pow( reductionFactor, path + 1 );
 
     if ( indexes.size() <= int( maxNumberOfIndexes ) )
+    {
+      delete simplifiedMesh;
       break;
+    }
 
     QVector<unsigned int> returnIndexes( indexes.size() );
     //returned size could be different than goal size but not than the input indexes count
@@ -550,6 +560,7 @@ QVector<QgsTriangularMesh *> QgsTriangularMesh::simplifyMesh( double reductionFa
     if ( size == 0 || int( size ) >= indexes.size() )
     {
       QgsDebugMsg( QStringLiteral( "Mesh simplification failed after %1 path" ).arg( path + 1 ) );
+      delete simplifiedMesh;
       break;
     }
 
@@ -570,7 +581,7 @@ QVector<QgsTriangularMesh *> QgsTriangularMesh::simplifyMesh( double reductionFa
     simplifiedMesh->finalizeTriangles();
     simplifiedMeshes.push_back( simplifiedMesh );
 
-    QgsDebugMsg( QStringLiteral( "Simplified mesh created with %1 triangles" ).arg( newMesh.faceCount() ) );
+    QgsDebugMsgLevel( QStringLiteral( "Simplified mesh created with %1 triangles" ).arg( newMesh.faceCount() ), 2 );
 
     simplifiedMesh->mTrianglesToNativeFaces = QVector<int>( simplifiedMesh->triangles().count(), 0 );
     for ( int i = 0; i < simplifiedMesh->mTrianglesToNativeFaces.count(); ++i )

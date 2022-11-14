@@ -351,8 +351,9 @@ void QgsMapCanvasDockWidget::syncViewCenter( QgsMapCanvas *sourceCanvas )
   QgsMapCanvas *destCanvas = sourceCanvas == mMapCanvas ? mMainCanvas : mMapCanvas;
 
   // reproject extent
-  const QgsCoordinateTransform ct( sourceCanvas->mapSettings().destinationCrs(),
-                                   destCanvas->mapSettings().destinationCrs(), QgsProject::instance() );
+  QgsCoordinateTransform ct( sourceCanvas->mapSettings().destinationCrs(),
+                             destCanvas->mapSettings().destinationCrs(), QgsProject::instance() );
+  ct.setBallparkTransformsAreAppropriate( true );
   try
   {
     destCanvas->setCenter( ct.transform( sourceCanvas->center() ) );
@@ -525,9 +526,9 @@ void QgsMapCanvasDockWidget::showLabels( bool show )
 void QgsMapCanvasDockWidget::autoZoomToSelection( bool autoZoom )
 {
   if ( autoZoom )
-    connect( mMapCanvas, &QgsMapCanvas::selectionChanged, mMapCanvas, qOverload<QgsVectorLayer *>( &QgsMapCanvas::zoomToSelected ) );
+    connect( mMapCanvas, &QgsMapCanvas::selectionChanged, mMapCanvas, qOverload<QgsMapLayer *>( &QgsMapCanvas::zoomToSelected ) );
   else
-    disconnect( mMapCanvas, &QgsMapCanvas::selectionChanged, mMapCanvas, qOverload<QgsVectorLayer *>( &QgsMapCanvas::zoomToSelected ) );
+    disconnect( mMapCanvas, &QgsMapCanvas::selectionChanged, mMapCanvas, qOverload<QgsMapLayer *>( &QgsMapCanvas::zoomToSelected ) );
 }
 
 QgsMapSettingsAction::QgsMapSettingsAction( QWidget *parent )

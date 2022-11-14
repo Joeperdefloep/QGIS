@@ -21,7 +21,7 @@
 #include "qgscolorramplegendnode.h"
 #include "qgscolorramplegendnodesettings.h"
 #include "qgsreadwritecontext.h"
-#include "qgscolorramp.h"
+#include "qgscolorrampimpl.h"
 #include "qgssymbol.h"
 
 #include <QDomDocument>
@@ -51,6 +51,11 @@ QgsSingleBandGrayRenderer *QgsSingleBandGrayRenderer::clone() const
   }
   renderer->setLegendSettings( mLegendSettings ? new QgsColorRampLegendNodeSettings( *mLegendSettings.get() ) : new QgsColorRampLegendNodeSettings() );
   return renderer;
+}
+
+Qgis::RasterRendererFlags QgsSingleBandGrayRenderer::flags() const
+{
+  return Qgis::RasterRendererFlag::InternalLayerOpacityHandling;
 }
 
 QgsRasterRenderer *QgsSingleBandGrayRenderer::create( const QDomElement &elem, QgsRasterInterface *input )

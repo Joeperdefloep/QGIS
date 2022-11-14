@@ -47,7 +47,7 @@ QgsNewsFeedParser::QgsNewsFeedParser( const QUrl &feedUrl, const QString &authcf
   QString feedLanguage = settingsFeedLanguage.value( mSettingsKey );
   if ( feedLanguage.isEmpty() )
   {
-    feedLanguage = QgsApplication::settingsLocaleUserLocale.value( QString(), true, QStringLiteral( "en" ) );
+    feedLanguage = QgsApplication::settingsLocaleUserLocale.valueWithDefaultOverride( QStringLiteral( "en" ) );
   }
   if ( !feedLanguage.isEmpty() && feedLanguage != QLatin1String( "C" ) )
     query.addQueryItem( QStringLiteral( "lang" ), feedLanguage.mid( 0, 2 ) );
@@ -143,7 +143,7 @@ void QgsNewsFeedParser::fetch()
   mFetchStartTime = QDateTime::currentDateTimeUtc().toSecsSinceEpoch();
 
   // allow canceling the news fetching without prompts -- it's not crucial if this gets finished or not
-  QgsNetworkContentFetcherTask *task = new QgsNetworkContentFetcherTask( req, mAuthCfg, QgsTask::CanCancel | QgsTask::CancelWithoutPrompt );
+  QgsNetworkContentFetcherTask *task = new QgsNetworkContentFetcherTask( req, mAuthCfg, QgsTask::CanCancel | QgsTask::CancelWithoutPrompt | QgsTask::Silent );
   task->setDescription( tr( "Fetching News Feed" ) );
   connect( task, &QgsNetworkContentFetcherTask::fetched, this, [this, task]
   {

@@ -22,12 +22,13 @@
 #include <QLineEdit>
 #include <QToolButton>
 #include <QComboBox>
+#include <QPointer>
 
 #include "qgscoordinatereferencesystem.h"
 #include "qgis_gui.h"
 
-class QgsProjectionSelectionDialog;
 class QgsHighlightableComboBox;
+class QgsCrsSelectionWidget;
 class QLabel;
 
 /**
@@ -141,6 +142,27 @@ class GUI_EXPORT QgsProjectionSelectionWidget : public QWidget
      */
     QString sourceEnsemble() const;
 
+    /**
+     * Sets the \a title for the CRS selector dialog window.
+     * \see dialogTitle()
+     * \since QGIS 3.24
+     */
+    void setDialogTitle( const QString &title );
+
+    /**
+     * Returns the title for the CRS selector dialog window.
+     * \see setDialogTitle()
+     * \since QGIS 3.24
+     */
+    QString dialogTitle() const;
+
+    /**
+     * Sets a filtered list of CRSes to show in the widget.
+     *
+     * \since QGIS 3.28
+     */
+    void setFilter( const QList< QgsCoordinateReferenceSystem > &crses );
+
   signals:
 
     /**
@@ -188,7 +210,6 @@ class GUI_EXPORT QgsProjectionSelectionWidget : public QWidget
     QgsCoordinateReferenceSystem mDefaultCrs;
     QgsHighlightableComboBox *mCrsComboBox = nullptr;
     QToolButton *mButton = nullptr;
-    QgsProjectionSelectionDialog *mDialog = nullptr;
     QString mNotSetText;
     QString mMessage;
 
@@ -197,6 +218,13 @@ class GUI_EXPORT QgsProjectionSelectionWidget : public QWidget
 
     QWidget *mWarningLabelContainer = nullptr;
     QLabel *mWarningLabel = nullptr;
+
+    QPointer< QgsCrsSelectionWidget > mActivePanel;
+    int mIgnorePanelSignals = 0;
+
+    QString mDialogTitle;
+
+    QList<QgsCoordinateReferenceSystem> mFilter;
 
     void addNotSetOption();
     void addProjectCrsOption();
@@ -210,6 +238,7 @@ class GUI_EXPORT QgsProjectionSelectionWidget : public QWidget
     void updateTooltip();
 
     QgsMapLayer *mapLayerFromMimeData( const QMimeData *data ) const;
+    QgsCoordinateReferenceSystem crsAtIndex( int index ) const;
 
   private slots:
 

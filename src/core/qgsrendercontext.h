@@ -22,11 +22,13 @@
 #include "qgis_sip.h"
 #include <QColor>
 #include <QPainter>
+#include <QPainterPath>
 #include <memory>
 
 #include "qgscoordinatetransform.h"
 #include "qgsexpressioncontext.h"
 #include "qgsfeaturefilterprovider.h"
+#include "qgslabelsink.h"
 #include "qgsmaptopixel.h"
 #include "qgsmapunitscale.h"
 #include "qgsrectangle.h"
@@ -360,10 +362,17 @@ class CORE_EXPORT QgsRenderContext : public QgsTemporalRangeObject
     double symbologyReferenceScale() const { return mSymbologyReferenceScale; }
 
     /**
-     * Gets access to new labeling engine (may be NULLPTR)
-     * \note not available in Python bindings
+     * Gets access to new labeling engine (may be NULLPTR).
+     * \note Not available in Python bindings.
      */
     QgsLabelingEngine *labelingEngine() const { return mLabelingEngine; } SIP_SKIP
+
+    /**
+     * Returns the associated label sink, or NULLPTR if not set.
+     * \note Not available in Python bindings.
+     * \since QGIS 3.24
+     */
+    QgsLabelSink *labelSink() const { return mLabelSink; } SIP_SKIP
 
     /**
      * Returns the color to use when rendering selected features.
@@ -531,10 +540,18 @@ class CORE_EXPORT QgsRenderContext : public QgsTemporalRangeObject
     void setForceVectorOutput( bool force );
 
     /**
-     * Assign new labeling engine
-     * \note not available in Python bindings
+     * Assigns the labeling engine
+     * \note Not available in Python bindings.
      */
     void setLabelingEngine( QgsLabelingEngine *engine ) { mLabelingEngine = engine; } SIP_SKIP
+
+    /**
+     * Assigns the label sink which will take over responsibility for handling labels.
+     * \note Ownership is not transferred and the sink must exist for the lifetime of the map rendering job.
+     * \note Not available in Python bindings.
+     * \since QGIS 3.24
+     */
+    void setLabelSink( QgsLabelSink *sink ) { mLabelSink = sink; } SIP_SKIP
 
     /**
      * Sets the \a color to use when rendering selected features.
@@ -873,6 +890,22 @@ class CORE_EXPORT QgsRenderContext : public QgsTemporalRangeObject
      */
     void setTextureOrigin( const QPointF &origin );
 
+#ifndef SIP_RUN
+
+    /**
+     * Add a clip \a path to be applied to the \a symbolLayer before rendering
+     * \since QGIS 3.26
+     */
+    void addSymbolLayerClipPath( const QgsSymbolLayer *symbolLayer, QPainterPath path );
+
+    /**
+     * Returns clip paths to be applied to the \a symbolLayer before rendering
+     * \since QGIS 3.26
+     */
+    QList<QPainterPath> symbolLayerClipPaths( const QgsSymbolLayer *symbolLayer ) const;
+
+#endif
+
     /**
      * Returns the range of z-values which should be rendered.
      *
@@ -958,6 +991,65 @@ class CORE_EXPORT QgsRenderContext : public QgsTemporalRangeObject
      */
     QImage::Format imageFormat() const { return mImageFormat; }
 
+    /**
+    * Returns the renderer usage
+    *
+    * \see setRendererUsage()
+    * \since QGIS 3.24
+    */
+    Qgis::RendererUsage rendererUsage() const {return mRendererUsage;}
+
+    /**
+    * Sets the renderer usage
+    *
+    * \note This usage not alter how the map gets rendered but the intention is that data provider
+    * knows the context of rendering and may report that to the backend.
+    *
+    * \see rendererUsage()
+    * \since QGIS 3.24
+    */
+    void setRendererUsage( Qgis::RendererUsage usage ) {mRendererUsage = usage;}
+
+    /**
+     * Returns the frame rate of the map, for maps which are part of an animation.
+     *
+     * Returns -1 if the map is not associated with an animation.
+     *
+     * \see setFrameRate()
+     * \since QGIS 3.26
+     */
+    double frameRate() const;
+
+    /**
+     * Sets the frame \a rate of the map (in frames per second), for maps which are part of an animation.
+     *
+     * Defaults to -1 if the map is not associated with an animation.
+     *
+     * \see frameRate()
+     * \since QGIS 3.26
+     */
+    void setFrameRate( double rate );
+
+    /**
+     * Returns the current frame number of the map (in frames per second), for maps which are part of an animation.
+     *
+     * Returns -1 if the map is not associated with an animation.
+     *
+     * \see setCurrentFrame()
+     * \since QGIS 3.26
+     */
+    long long currentFrame() const;
+
+    /**
+     * Sets the current \a frame of the map, for maps which are part of an animation.
+     *
+     * Defaults to -1 if the map is not associated with an animation.
+     *
+     * \see currentFrame()
+     * \since QGIS 3.26
+     */
+    void setCurrentFrame( long long frame );
+
   private:
 
     Qgis::RenderContextFlags mFlags;
@@ -1024,8 +1116,11 @@ class CORE_EXPORT QgsRenderContext : public QgsTemporalRangeObject
 
     double mSymbologyReferenceScale = -1;
 
-    //! Newer labeling engine implementation (can be NULLPTR)
+    //! Labeling engine implementation (can be NULLPTR)
     QgsLabelingEngine *mLabelingEngine = nullptr;
+
+    //! Label sink (can be NULLPTR)
+    QgsLabelSink *mLabelSink = nullptr;
 
     //! Color used for features that are marked as selected
     QColor mSelectionColor;
@@ -1067,6 +1162,14 @@ class CORE_EXPORT QgsRenderContext : public QgsTemporalRangeObject
     QSize mSize;
     float mDevicePixelRatio = 1.0;
     QImage::Format mImageFormat = QImage::Format_ARGB32_Premultiplied;
+
+    Qgis::RendererUsage mRendererUsage = Qgis::RendererUsage::Unknown;
+
+    double mFrameRate = -1;
+    long long mCurrentFrame = -1;
+
+    //! clip paths to be applied to the symbol layer before rendering
+    QMap< const QgsSymbolLayer *, QList<QPainterPath> > mSymbolLayerClipPaths;
 
 #ifdef QGISDEBUG
     bool mHasTransformContext = false;

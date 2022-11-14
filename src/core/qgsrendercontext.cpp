@@ -56,6 +56,7 @@ QgsRenderContext::QgsRenderContext( const QgsRenderContext &rh )
   , mRendererScale( rh.mRendererScale )
   , mSymbologyReferenceScale( rh.mSymbologyReferenceScale )
   , mLabelingEngine( rh.mLabelingEngine )
+  , mLabelSink( rh.mLabelSink )
   , mSelectionColor( rh.mSelectionColor )
   , mVectorSimplifyMethod( rh.mVectorSimplifyMethod )
   , mExpressionContext( rh.mExpressionContext )
@@ -77,6 +78,10 @@ QgsRenderContext::QgsRenderContext( const QgsRenderContext &rh )
   , mSize( rh.mSize )
   , mDevicePixelRatio( rh.mDevicePixelRatio )
   , mImageFormat( rh.mImageFormat )
+  , mRendererUsage( rh.mRendererUsage )
+  , mFrameRate( rh.mFrameRate )
+  , mCurrentFrame( rh.mCurrentFrame )
+  , mSymbolLayerClipPaths( rh.mSymbolLayerClipPaths )
 #ifdef QGISDEBUG
   , mHasTransformContext( rh.mHasTransformContext )
 #endif
@@ -99,6 +104,7 @@ QgsRenderContext &QgsRenderContext::operator=( const QgsRenderContext &rh )
   mRendererScale = rh.mRendererScale;
   mSymbologyReferenceScale = rh.mSymbologyReferenceScale;
   mLabelingEngine = rh.mLabelingEngine;
+  mLabelSink = rh.mLabelSink;
   mSelectionColor = rh.mSelectionColor;
   mVectorSimplifyMethod = rh.mVectorSimplifyMethod;
   mExpressionContext = rh.mExpressionContext;
@@ -121,6 +127,10 @@ QgsRenderContext &QgsRenderContext::operator=( const QgsRenderContext &rh )
   mDevicePixelRatio = rh.mDevicePixelRatio;
   mImageFormat = rh.mImageFormat;
   setIsTemporal( rh.isTemporal() );
+  mRendererUsage = rh.mRendererUsage;
+  mFrameRate = rh.mFrameRate;
+  mCurrentFrame = rh.mCurrentFrame;
+  mSymbolLayerClipPaths = rh.mSymbolLayerClipPaths;
   if ( isTemporal() )
     setTemporalRange( rh.temporalRange() );
 #ifdef QGISDEBUG
@@ -147,11 +157,8 @@ QgsRenderContext QgsRenderContext::fromQPainter( QPainter *painter )
     context.setFlag( Qgis::RenderContextFlag::Antialiasing, true );
   if ( painter && painter->renderHints() & QPainter::SmoothPixmapTransform )
     context.setFlag( Qgis::RenderContextFlag::HighQualityImageTransforms, true );
-
-#if QT_VERSION >= QT_VERSION_CHECK(5, 13, 0)
   if ( painter && painter->renderHints() & QPainter::LosslessImageRendering )
     context.setFlag( Qgis::RenderContextFlag::LosslessImageRendering, true );
-#endif
 
   return context;
 }
@@ -165,9 +172,7 @@ void QgsRenderContext::setPainterFlagsUsingContext( QPainter *painter ) const
     return;
 
   painter->setRenderHint( QPainter::Antialiasing, mFlags & Qgis::RenderContextFlag::Antialiasing );
-#if QT_VERSION >= QT_VERSION_CHECK(5, 13, 0)
   painter->setRenderHint( QPainter::LosslessImageRendering, mFlags & Qgis::RenderContextFlag::LosslessImageRendering );
-#endif
   painter->setRenderHint( QPainter::SmoothPixmapTransform, mFlags & Qgis::RenderContextFlag::HighQualityImageTransforms );
 }
 
@@ -245,6 +250,7 @@ QgsRenderContext QgsRenderContext::fromMapSettings( const QgsMapSettings &mapSet
   ctx.setFlag( Qgis::RenderContextFlag::LosslessImageRendering, mapSettings.testFlag( Qgis::MapSettingsFlag::LosslessImageRendering ) );
   ctx.setFlag( Qgis::RenderContextFlag::Render3DMap, mapSettings.testFlag( Qgis::MapSettingsFlag::Render3DMap ) );
   ctx.setFlag( Qgis::RenderContextFlag::HighQualityImageTransforms, mapSettings.testFlag( Qgis::MapSettingsFlag::HighQualityImageTransforms ) );
+  ctx.setFlag( Qgis::RenderContextFlag::SkipSymbolRendering, mapSettings.testFlag( Qgis::MapSettingsFlag::SkipSymbolRendering ) );
   ctx.setScaleFactor( mapSettings.outputDpi() / 25.4 ); // = pixels per mm
   ctx.setDpiTarget( mapSettings.dpiTarget() >= 0.0 ? mapSettings.dpiTarget() : -1.0 );
   ctx.setRendererScale( mapSettings.scale() );
@@ -273,6 +279,10 @@ QgsRenderContext QgsRenderContext::fromMapSettings( const QgsMapSettings &mapSet
   ctx.setImageFormat( mapSettings.outputImageFormat() );
 
   ctx.mClippingRegions = mapSettings.clippingRegions();
+
+  ctx.mRendererUsage = mapSettings.rendererUsage();
+  ctx.mFrameRate = mapSettings.frameRate();
+  ctx.mCurrentFrame = mapSettings.currentFrame();
 
   return ctx;
 }
@@ -667,4 +677,32 @@ QSize QgsRenderContext::deviceOutputSize() const
   return outputSize() * mDevicePixelRatio;
 }
 
+double QgsRenderContext::frameRate() const
+{
+  return mFrameRate;
+}
 
+void QgsRenderContext::setFrameRate( double rate )
+{
+  mFrameRate = rate;
+}
+
+long long QgsRenderContext::currentFrame() const
+{
+  return mCurrentFrame;
+}
+
+void QgsRenderContext::setCurrentFrame( long long frame )
+{
+  mCurrentFrame = frame;
+}
+
+void QgsRenderContext::addSymbolLayerClipPath( const QgsSymbolLayer *symbolLayer, QPainterPath path )
+{
+  mSymbolLayerClipPaths[ symbolLayer ].append( path );
+}
+
+QList<QPainterPath> QgsRenderContext::symbolLayerClipPaths( const QgsSymbolLayer *symbolLayer ) const
+{
+  return mSymbolLayerClipPaths[ symbolLayer ];
+}

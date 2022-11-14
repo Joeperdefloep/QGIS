@@ -21,16 +21,18 @@
 
 #include "qgsfeature.h"
 #include "qgsexpression.h"
-#include "qgscolorramp.h"
 #include "qgsvectorlayerfeatureiterator.h"
 #include "qgsrasterlayer.h"
 #include "qgsproject.h"
 #include "qgsrelationmanager.h"
 #include "qgsvectorlayer.h"
 #include "qgsmeshlayer.h"
+#include "qgsvariantutils.h"
 
 #include <QThread>
 #include <QLocale>
+
+class QgsGradientColorRamp;
 
 #define ENSURE_NO_EVAL_ERROR   {  if ( parent->hasEvalError() ) return QVariant(); }
 #define SET_EVAL_ERROR(x)   { parent->setEvalErrorString( x ); return QVariant(); }
@@ -87,17 +89,17 @@ class CORE_EXPORT QgsExpressionUtils
     static TVL getTVLValue( const QVariant &value, QgsExpression *parent )
     {
       // we need to convert to TVL
-      if ( value.isNull() )
+      if ( QgsVariantUtils::isNull( value ) )
         return Unknown;
 
       //handle some special cases
-      if ( value.canConvert<QgsGeometry>() )
+      if ( value.userType() == QMetaType::type( "QgsGeometry" ) )
       {
         //geom is false if empty
         const QgsGeometry geom = value.value<QgsGeometry>();
         return geom.isNull() ? False : True;
       }
-      else if ( value.canConvert<QgsFeature>() )
+      else if ( value.userType() == QMetaType::type( "QgsFeature" ) )
       {
         //feat is false if non-valid
         const QgsFeature feat = value.value<QgsFeature>();
@@ -170,7 +172,7 @@ class CORE_EXPORT QgsExpressionUtils
 
     static inline bool isIntervalSafe( const QVariant &v )
     {
-      if ( v.canConvert<QgsInterval>() )
+      if ( v.userType() == QMetaType::type( "QgsInterval" ) )
       {
         return true;
       }
@@ -184,12 +186,12 @@ class CORE_EXPORT QgsExpressionUtils
 
     static inline bool isNull( const QVariant &v )
     {
-      return v.isNull();
+      return QgsVariantUtils::isNull( v );
     }
 
     static inline bool isList( const QVariant &v )
     {
-      return v.type() == QVariant::List;
+      return v.type() == QVariant::List || v.type() == QVariant::StringList;
     }
 
 // implicit conversion to string
@@ -307,7 +309,7 @@ class CORE_EXPORT QgsExpressionUtils
 
     static QgsInterval getInterval( const QVariant &value, QgsExpression *parent, bool report_error = false )
     {
-      if ( value.canConvert<QgsInterval>() )
+      if ( value.userType() == QMetaType::type( "QgsInterval" ) )
         return value.value<QgsInterval>();
 
       QgsInterval inter = QgsInterval::fromString( value.toString() );
@@ -322,21 +324,11 @@ class CORE_EXPORT QgsExpressionUtils
       return QgsInterval();
     }
 
-    static QgsGradientColorRamp getRamp( const QVariant &value, QgsExpression *parent, bool report_error = false )
-    {
-      if ( value.canConvert<QgsGradientColorRamp>() )
-        return value.value<QgsGradientColorRamp>();
-
-      // If we get here then we can't convert so we just error and return invalid.
-      if ( report_error )
-        parent->setEvalErrorString( QObject::tr( "Cannot convert '%1' to gradient ramp" ).arg( value.toString() ) );
-
-      return QgsGradientColorRamp();
-    }
+    static QgsGradientColorRamp getRamp( const QVariant &value, QgsExpression *parent, bool report_error = false );
 
     static QgsGeometry getGeometry( const QVariant &value, QgsExpression *parent )
     {
-      if ( value.canConvert<QgsGeometry>() )
+      if ( value.userType() == QMetaType::type( "QgsGeometry" ) )
         return value.value<QgsGeometry>();
 
       parent->setEvalErrorString( QStringLiteral( "Cannot convert to geometry" ) );
@@ -345,7 +337,7 @@ class CORE_EXPORT QgsExpressionUtils
 
     static QgsFeature getFeature( const QVariant &value, QgsExpression *parent )
     {
-      if ( value.canConvert<QgsFeature>() )
+      if ( value.userType() == QMetaType::type( "QgsFeature" ) )
         return value.value<QgsFeature>();
 
       parent->setEvalErrorString( QStringLiteral( "Cannot convert to feature" ) );
@@ -365,6 +357,17 @@ class CORE_EXPORT QgsExpressionUtils
     {
       // First check if we already received a layer pointer
       QgsMapLayer *ml = value.value< QgsWeakMapLayerPointer >().data();
+      if ( !ml )
+      {
+        ml = value.value< QgsMapLayer * >();
+#ifdef QGISDEBUG
+        if ( ml )
+        {
+          qWarning( "Raw map layer pointer stored in expression evaluation, switch to QgsWeakMapLayerPointer instead" );
+        }
+#endif
+      }
+
       QgsProject *project = QgsProject::instance();
 
       // No pointer yet, maybe it's a layer id?
@@ -416,6 +419,13 @@ class CORE_EXPORT QgsExpressionUtils
     {
       return qobject_cast<QgsMeshLayer *>( getMapLayer( value, e ) );
     }
+
+    /**
+     * Tries to convert a \a value to a file path.
+     *
+     * \since QGIS 3.24
+     */
+    static QString getFilePathValue( const QVariant &value, QgsExpression *parent );
 
     static QVariantList getListValue( const QVariant &value, QgsExpression *parent )
     {

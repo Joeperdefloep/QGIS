@@ -207,7 +207,7 @@ void QgsWelcomePage::recentProjectItemActivated( const QModelIndex &index )
 
 void QgsWelcomePage::templateProjectItemActivated( const QModelIndex &index )
 {
-  if ( index.data( QgsProjectListItemDelegate::NativePathRole ).isNull() )
+  if ( !index.data( QgsProjectListItemDelegate::NativePathRole ).isValid() )
     QgisApp::instance()->newProject();
   else
     QgisApp::instance()->fileNewFromTemplate( index.data( QgsProjectListItemDelegate::NativePathRole ).toString() );
@@ -286,7 +286,7 @@ void QgsWelcomePage::showContextMenuForProjects( QPoint point )
       connect( openFolderAction, &QAction::triggered, this, [path]
       {
         const QgsFocusKeeper focusKeeper;
-        QgsGui::instance()->nativePlatformInterface()->openFileExplorerAndSelectFile( path );
+        QgsGui::nativePlatformInterface()->openFileExplorerAndSelectFile( path );
       } );
       menu->addAction( openFolderAction );
     }

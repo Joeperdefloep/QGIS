@@ -83,7 +83,7 @@ void QgsAuthOAuth2Edit::initGui()
   btnTokenClear->setMaximumHeight( 20 );
   btnTokenClear->setText( tr( "Tokens" ) );
   btnTokenClear->setToolTip( tr( "Remove cached tokens" ) );
-  btnTokenClear->setIcon( QIcon( QStringLiteral( ":/oauth2method/oauth2_resources/close.svg" ) ) );
+  btnTokenClear->setIcon( QIcon( QStringLiteral( ":/oauth2method/svg/close.svg" ) ) );
   btnTokenClear->setIconSize( QSize( 12, 12 ) );
   btnTokenClear->setToolButtonStyle( Qt::ToolButtonTextBesideIcon );
   btnTokenClear->setEnabled( hasTokenCacheFile() );
@@ -582,7 +582,7 @@ void QgsAuthOAuth2Edit::selectCurrentDefinedConfig()
 void QgsAuthOAuth2Edit::getDefinedCustomDir()
 {
   const QString extradir = QFileDialog::getExistingDirectory( this, tr( "Select extra directory to parse" ),
-                           QDir::homePath(), QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks );
+                           QDir::homePath(), QFileDialog::DontResolveSymlinks );
   this->raise();
   this->activateWindow();
 

@@ -37,8 +37,8 @@
 
 #include <QSettings>
 
-QgsMapToolAddFeature::QgsMapToolAddFeature( QgsMapCanvas *canvas, CaptureMode mode )
-  : QgsMapToolDigitizeFeature( canvas, QgisApp::instance()->cadDockWidget(), mode )
+QgsMapToolAddFeature::QgsMapToolAddFeature( QgsMapCanvas *canvas, QgsAdvancedDigitizingDockWidget *cadDockWidget, CaptureMode mode )
+  : QgsMapToolDigitizeFeature( canvas, cadDockWidget, mode )
   , mCheckGeometryType( true )
 {
   setLayer( canvas->currentLayer() );
@@ -48,11 +48,16 @@ QgsMapToolAddFeature::QgsMapToolAddFeature( QgsMapCanvas *canvas, CaptureMode mo
   connect( QgisApp::instance(), &QgisApp::projectRead, this, &QgsMapToolAddFeature::stopCapturing );
 }
 
+QgsMapToolAddFeature::QgsMapToolAddFeature( QgsMapCanvas *canvas, CaptureMode mode )
+  : QgsMapToolAddFeature( canvas, QgisApp::instance()->cadDockWidget(), mode )
+{
+}
+
 bool QgsMapToolAddFeature::addFeature( QgsVectorLayer *vlayer, const QgsFeature &f, bool showModal )
 {
   QgsFeature feat( f );
   QgsExpressionContextScope *scope = QgsExpressionContextUtils::mapToolCaptureScope( snappingMatches() );
-  QgsFeatureAction *action = new QgsFeatureAction( tr( "add feature" ), feat, vlayer, QString(), -1, this );
+  QgsFeatureAction *action = new QgsFeatureAction( tr( "add feature" ), feat, vlayer, QUuid(), -1, this );
   if ( QgsRubberBand *rb = takeRubberBand() )
     connect( action, &QgsFeatureAction::addFeatureFinished, rb, &QgsRubberBand::deleteLater );
   const bool res = action->addFeature( QgsAttributeMap(), showModal, scope );
@@ -61,17 +66,17 @@ bool QgsMapToolAddFeature::addFeature( QgsVectorLayer *vlayer, const QgsFeature 
   return res;
 }
 
-void QgsMapToolAddFeature::digitized( const QgsFeature &f )
+void QgsMapToolAddFeature::featureDigitized( const QgsFeature &feature )
 {
   QgsVectorLayer *vlayer = currentVectorLayer();
-  const bool res = addFeature( vlayer, f, false );
+  const bool res = addFeature( vlayer, feature, false );
 
   if ( res )
   {
     //add points to other features to keep topology up-to-date
     const bool topologicalEditing = QgsProject::instance()->topologicalEditing();
-    const QgsProject::AvoidIntersectionsMode avoidIntersectionsMode = QgsProject::instance()->avoidIntersectionsMode();
-    if ( topologicalEditing && avoidIntersectionsMode == QgsProject::AvoidIntersectionsMode::AvoidIntersectionsLayers &&
+    const Qgis::AvoidIntersectionsMode avoidIntersectionsMode = QgsProject::instance()->avoidIntersectionsMode();
+    if ( topologicalEditing && avoidIntersectionsMode == Qgis::AvoidIntersectionsMode::AvoidIntersectionsLayers &&
          ( mode() == CaptureLine || mode() == CapturePolygon ) )
     {
 
@@ -86,7 +91,7 @@ void QgsMapToolAddFeature::digitized( const QgsFeature &f )
           //can only add topological points if background layer is editable...
           if ( vl->geometryType() == QgsWkbTypes::PolygonGeometry && vl->isEditable() )
           {
-            vl->addTopologicalPoints( f.geometry() );
+            vl->addTopologicalPoints( feature.geometry() );
           }
         }
       }
@@ -96,12 +101,30 @@ void QgsMapToolAddFeature::digitized( const QgsFeature &f )
       const QList<QgsPointLocator::Match> sm = snappingMatches();
       for ( int i = 0; i < sm.size() ; ++i )
       {
-        if ( sm.at( i ).layer() )
+        if ( sm.at( i ).layer() && sm.at( i ).layer()->isEditable() && sm.at( i ).layer() != vlayer )
         {
-          sm.at( i ).layer()->addTopologicalPoints( f.geometry().vertexAt( i ) );
+          QgsPoint topologicalPoint{ feature.geometry().vertexAt( i ) };
+          if ( sm.at( i ).layer()->crs() != vlayer->crs() )
+          {
+            // transform digitized geometry from vlayer crs to snapping layer crs and add topological point
+            try
+            {
+              topologicalPoint.transform( QgsCoordinateTransform( vlayer->crs(), sm.at( i ).layer()->crs(), sm.at( i ).layer()->transformContext() ) );
+              sm.at( i ).layer()->addTopologicalPoints( topologicalPoint );
+            }
+            catch ( QgsCsException &cse )
+            {
+              Q_UNUSED( cse )
+              QgsDebugMsg( QStringLiteral( "transformation to layer coordinate failed" ) );
+            }
+          }
+          else
+          {
+            sm.at( i ).layer()->addTopologicalPoints( topologicalPoint );
+          }
         }
       }
-      vlayer->addTopologicalPoints( f.geometry() );
+      vlayer->addTopologicalPoints( feature.geometry() );
     }
   }
 }

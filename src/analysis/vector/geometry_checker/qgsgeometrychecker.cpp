@@ -150,6 +150,7 @@ bool QgsGeometryChecker::fixError( QgsGeometryCheckError *error, int method, boo
     const QMap<QgsFeatureId, QList<QgsGeometryCheck::Change>> &layerChanges = it.value();
     QgsFeaturePool *featurePool = mFeaturePools[it.key()];
     QgsCoordinateTransform t( featurePool->layer()->crs(), mContext->mapCrs, QgsProject::instance() );
+    t.setBallparkTransformsAreAppropriate( true );
     for ( auto layerChangeIt = layerChanges.constBegin(); layerChangeIt != layerChanges.constEnd(); ++layerChangeIt )
     {
       bool removed = false;
@@ -185,11 +186,11 @@ bool QgsGeometryChecker::fixError( QgsGeometryCheckError *error, int method, boo
   }
   recheckArea.grow( 10 * mContext->tolerance );
   QMap<QString, QgsFeatureIds> recheckAreaFeatures;
-  for ( const QString &layerId : mFeaturePools.keys() )
+  for ( auto it = mFeaturePools.constBegin(); it != mFeaturePools.constEnd(); it++ )
   {
-    QgsFeaturePool *featurePool = mFeaturePools[layerId];
+    QgsFeaturePool *featurePool = it.value();
     QgsCoordinateTransform t( mContext->mapCrs, featurePool->layer()->crs(), QgsProject::instance() );
-    recheckAreaFeatures[layerId] = featurePool->getIntersects( t.transform( recheckArea ) );
+    recheckAreaFeatures[it.key()] = featurePool->getIntersects( t.transform( recheckArea ) );
   }
 
   // Recheck feature / changed area to detect new errors
@@ -271,9 +272,9 @@ bool QgsGeometryChecker::fixError( QgsGeometryCheckError *error, int method, boo
 
   if ( triggerRepaint )
   {
-    for ( const QString &layerId : changes.keys() )
+    for ( auto itChange = changes.constBegin(); itChange != changes.constEnd(); itChange++ )
     {
-      mFeaturePools[layerId]->layer()->triggerRepaint();
+      mFeaturePools[itChange.key()]->layer()->triggerRepaint();
     }
   }
 

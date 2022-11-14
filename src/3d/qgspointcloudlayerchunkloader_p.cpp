@@ -19,23 +19,20 @@
 #include "qgspointcloudlayer3drenderer.h"
 #include "qgschunknode_p.h"
 #include "qgslogger.h"
-#include "qgspointcloudlayer.h"
 #include "qgspointcloudindex.h"
 #include "qgseventtracing.h"
 
-#include "qgspoint3dsymbol.h"
-#include "qgsphongmaterialsettings.h"
 
 #include "qgspointcloud3dsymbol.h"
-#include "qgsapplication.h"
-#include "qgs3dsymbolregistry.h"
 #include "qgspointcloudattribute.h"
-#include "qgspointcloudrequest.h"
-#include "qgscolorramptexture.h"
 #include "qgspointcloud3dsymbol_p.h"
 
 #include <QtConcurrent>
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
 #include <Qt3DRender/QAttribute>
+#else
+#include <Qt3DCore/QAttribute>
+#endif
 #include <Qt3DRender/QTechnique>
 #include <Qt3DRender/QShaderProgram>
 #include <Qt3DRender/QGraphicsApiFilter>
@@ -82,7 +79,8 @@ QgsPointCloudLayerChunkLoader::QgsPointCloudLayerChunkLoader( const QgsPointClou
   mFutureWatcher = new QFutureWatcher<void>( this );
   connect( mFutureWatcher, &QFutureWatcher<void>::finished, this, &QgsChunkQueueJob::finished );
 
-  const QFuture<void> future = QtConcurrent::run( [pc, pcNode, this]
+  const QgsAABB bbox = node->bbox();
+  const QFuture<void> future = QtConcurrent::run( [pc, pcNode, bbox, this]
   {
     const QgsEventTracing::ScopedEvent e( QStringLiteral( "3D" ), QStringLiteral( "PC chunk load" ) );
 
@@ -91,7 +89,10 @@ QgsPointCloudLayerChunkLoader::QgsPointCloudLayerChunkLoader( const QgsPointClou
       QgsDebugMsgLevel( QStringLiteral( "canceled" ), 2 );
       return;
     }
+
     mHandler->processNode( pc, pcNode, mContext );
+    if ( mContext.symbol()->renderAsTriangles() )
+      mHandler->triangulate( pc, pcNode, mContext, bbox );
   } );
 
   // emit finished() as soon as the handler is populated with features
@@ -204,10 +205,12 @@ QgsAABB nodeBoundsToAABB( QgsPointCloudDataBounds nodeBounds, QgsVector3D offset
 {
   QgsVector3D extentMin3D( nodeBounds.xMin() * scale.x() + offset.x(), nodeBounds.yMin() * scale.y() + offset.y(), nodeBounds.zMin() * scale.z() + offset.z() + zValueOffset );
   QgsVector3D extentMax3D( nodeBounds.xMax() * scale.x() + offset.x(), nodeBounds.yMax() * scale.y() + offset.y(), nodeBounds.zMax() * scale.z() + offset.z() + zValueOffset );
+  QgsCoordinateTransform extentTransform = coordinateTransform;
+  extentTransform.setBallparkTransformsAreAppropriate( true );
   try
   {
-    extentMin3D = coordinateTransform.transform( extentMin3D );
-    extentMax3D = coordinateTransform.transform( extentMax3D );
+    extentMin3D = extentTransform.transform( extentMin3D );
+    extentMax3D = extentTransform.transform( extentMax3D );
   }
   catch ( QgsCsException & )
   {
@@ -221,11 +224,15 @@ QgsAABB nodeBoundsToAABB( QgsPointCloudDataBounds nodeBounds, QgsVector3D offset
 }
 
 
-QgsPointCloudLayerChunkedEntity::QgsPointCloudLayerChunkedEntity( QgsPointCloudIndex *pc, const Qgs3DMapSettings &map, const QgsCoordinateTransform &coordinateTransform, QgsPointCloud3DSymbol *symbol, float maximumScreenSpaceError, bool showBoundingBoxes, double zValueScale, double zValueOffset, int pointBudget )
+QgsPointCloudLayerChunkedEntity::QgsPointCloudLayerChunkedEntity( QgsPointCloudIndex *pc, const Qgs3DMapSettings &map,
+    const QgsCoordinateTransform &coordinateTransform, QgsPointCloud3DSymbol *symbol,
+    float maximumScreenSpaceError, bool showBoundingBoxes,
+    double zValueScale, double zValueOffset,
+    int pointBudget )
   : QgsChunkedEntity( maximumScreenSpaceError,
                       new QgsPointCloudLayerChunkLoaderFactory( map, coordinateTransform, pc, symbol, zValueScale, zValueOffset, pointBudget ), true, pointBudget )
 {
-  setUsingAdditiveStrategy( true );
+  setUsingAdditiveStrategy( !symbol->renderAsTriangles() );
   setShowBoundingBoxes( showBoundingBoxes );
 }
 

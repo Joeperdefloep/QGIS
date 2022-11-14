@@ -237,17 +237,33 @@ class CORE_EXPORT QgsProviderRegistry
                     QString &errCause );
 
     /**
-     * Gets a layer style defined by \a styleId
+     * Returns TRUE if a layer style with the specified \a styleId exists in the provider defined by \a providerKey and \a uri.
+     *
+     * \param providerKey provider key
+     * \param uri provider URI
+     * \param styleId style ID to test for
+     * \param errorCause will be set to a descriptive error message, if an error occurs while checking if the style exists
+     * \returns TRUE if the layer style already exists
+     *
+     * \see getStyleById()
+     * \since QGIS 3.24
+     */
+    bool styleExists( const QString &providerKey, const QString &uri, const QString &styleId, QString &errorCause SIP_OUT );
+
+    /**
+     * Gets a layer style defined by \a styleId.
+     *
+     * \see styleExists()
      *
      * \since QGIS 3.10
      */
-    QString getStyleById( const QString &providerKey,  const QString &uri, QString styleId, QString &errCause );
+    QString getStyleById( const QString &providerKey, const QString &uri, const QString &styleId, QString &errCause );
 
     /**
      * Deletes a layer style defined by \a styleId
      * \since QGIS 3.10
      */
-    bool deleteStyleById( const QString &providerKey,  const QString &uri, QString styleId, QString &errCause );
+    bool deleteStyleById( const QString &providerKey, const QString &uri, const QString &styleId, QString &errCause );
 
     /**
      * Saves a layer style to provider
@@ -260,9 +276,21 @@ class CORE_EXPORT QgsProviderRegistry
 
     /**
      * Loads a layer style defined by \a uri
+     * \returns the style QML (XML)
      * \since QGIS 3.10
      */
-    QString loadStyle( const QString &providerKey,  const QString &uri, QString &errCause );
+    QString loadStyle( const QString &providerKey, const QString &uri, QString &errCause );
+
+    /**
+     * Loads a layer style from the provider storage, reporting its name.
+     * \param providerKey name of the data provider
+     * \param uri data source uri
+     * \param styleName the name of the style if available, empty otherwise
+     * \param errCause report errors
+     * \returns the style QML (XML)
+     * \since QGIS 3.30
+     */
+    QString loadStoredStyle( const QString &providerKey, const QString &uri, QString &styleName, QString &errCause );
 
     /**
      * Saves \a metadata to the layer corresponding to the specified \a uri.
@@ -303,7 +331,7 @@ class CORE_EXPORT QgsProviderRegistry
      *
      * \deprecated QGIS 3.10 - any provider functionality should be accessed through QgsProviderMetadata
      */
-    Q_DECL_DEPRECATED QFunctionPointer function( const QString &providerKey, const QString &functionName ) SIP_DEPRECATED;
+    Q_DECL_DEPRECATED QFunctionPointer function( const QString &providerKey, const QString &functionName ) const SIP_DEPRECATED;
 
     /**
      * Returns a new QLibrary for the specified \a providerKey. Ownership of the returned
@@ -321,6 +349,14 @@ class CORE_EXPORT QgsProviderRegistry
 
     //! Returns metadata of the provider or NULLPTR if not found
     QgsProviderMetadata *providerMetadata( const QString &providerKey ) const;
+
+    /**
+     * Returns a list of the provider keys for available providers which handle the specified
+     * layer \a type.
+     *
+     * \since QGIS 3.26
+     */
+    QSet< QString > providersForLayerType( QgsMapLayerType type ) const;
 
     /**
      * \ingroup core
@@ -731,4 +767,3 @@ class CORE_EXPORT QgsProviderRegistry
 }; // class QgsProviderRegistry
 
 #endif //QGSPROVIDERREGISTRY_H
-

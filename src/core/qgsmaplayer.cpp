@@ -98,6 +98,11 @@ QgsMapLayer::QgsMapLayer( QgsMapLayerType type,
 
 QgsMapLayer::~QgsMapLayer()
 {
+  if ( project() && project()->pathResolver().writePath( mDataSource ).startsWith( "attachment:" ) )
+  {
+    project()->removeAttachedFile( mDataSource );
+  }
+
   delete m3DRenderer;
   delete mLegend;
   delete mStyleManager;
@@ -811,6 +816,20 @@ void QgsMapLayer::writeStyleManager( QDomNode &layerNode, QDomDocument &doc ) co
   }
 }
 
+QString QgsMapLayer::mapTipTemplate() const
+{
+  return mMapTipTemplate;
+}
+
+void QgsMapLayer::setMapTipTemplate( const QString &mapTip )
+{
+  if ( mMapTipTemplate == mapTip )
+    return;
+
+  mMapTipTemplate = mapTip;
+  emit mapTipTemplateChanged();
+}
+
 bool QgsMapLayer::isValid() const
 {
   return mValid;
@@ -953,7 +972,7 @@ QString QgsMapLayer::formatLayerName( const QString &name )
 {
   QString layerName( name );
   layerName.replace( '_', ' ' );
-  layerName = QgsStringUtils::capitalize( layerName, QgsStringUtils::ForceFirstLetterToCapital );
+  layerName = QgsStringUtils::capitalize( layerName, Qgis::Capitalization::ForceFirstLetterToCapital );
   return layerName;
 }
 
@@ -965,8 +984,8 @@ QString QgsMapLayer::baseURI( PropertyType type ) const
   // as in these cases URI may contain layer name and/or additional
   // information. This also strips prefix in case if VSIFILE mechanism
   // is used
-  if ( providerType() == QLatin1String( "ogr" ) || providerType() == QLatin1String( "delimitedtext" ) ||
-       providerType() == QLatin1String( "spatialite" ) )
+  if ( providerType() == QLatin1String( "ogr" ) || providerType() == QLatin1String( "delimitedtext" )
+       || providerType() == QLatin1String( "gdal" ) || providerType() == QLatin1String( "spatialite" ) )
   {
     QVariantMap components = QgsProviderRegistry::instance()->decodeUri( providerType(), myURI );
     myURI = components["path"].toString();
@@ -1118,6 +1137,8 @@ QString QgsMapLayer::loadNamedProperty( const QString &uri, QgsMapLayer::Propert
   QgsDebugMsgLevel( QStringLiteral( "uri = %1 myURI = %2" ).arg( uri, publicSource() ), 4 );
 
   resultFlag = false;
+  if ( uri.isEmpty() )
+    return QString();
 
   QDomDocument myDocument( QStringLiteral( "qgis" ) );
 
@@ -1317,7 +1338,12 @@ void QgsMapLayer::exportNamedStyle( QDomDocument &doc, QString &errorMsg, const 
 
 QString QgsMapLayer::saveDefaultStyle( bool &resultFlag )
 {
-  return saveNamedStyle( styleURI(), resultFlag );
+  return saveDefaultStyle( resultFlag, AllStyleCategories );
+}
+
+QString QgsMapLayer::saveDefaultStyle( bool &resultFlag, StyleCategories categories )
+{
+  return saveNamedStyle( styleURI(), resultFlag, categories );
 }
 
 QString QgsMapLayer::saveNamedMetadata( const QString &uri, bool &resultFlag )
@@ -2250,7 +2276,8 @@ QgsRectangle QgsMapLayer::wgs84Extent( bool forceRecalculate ) const
   }
   else if ( ! mExtent.isNull() )
   {
-    const QgsCoordinateTransform transformer { crs(), QgsCoordinateReferenceSystem::fromOgcWmsCrs( geoEpsgCrsAuthId() ), transformContext() };
+    QgsCoordinateTransform transformer { crs(), QgsCoordinateReferenceSystem::fromOgcWmsCrs( geoEpsgCrsAuthId() ), transformContext() };
+    transformer.setBallparkTransformsAreAppropriate( true );
     try
     {
       wgs84Extent = transformer.transformBoundingBox( mExtent );
